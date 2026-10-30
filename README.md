@@ -206,7 +206,6 @@ Use this target hierarchy at the repository root when adding features. PRPs are 
 
 ```
 todo-app/
-├── AGENT_SYNC.md
 ├── CLAUDE.md
 ├── .github/
 │   └── copilot-instructions.md

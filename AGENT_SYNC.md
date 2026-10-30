@@ -1,13 +1,13 @@
 # Cross-Agent Synchronization
 
-This file records shared architectural decisions, resolved specification conflicts, and implementation-order guidance for all agents working on this repository. Read it before designing or implementing features, together with the relevant PRP.
+This file is an optional reference for shared architectural decisions, resolved specification conflicts, and implementation-order guidance. Consult it only when the user explicitly requests it.
 
 ## Maintenance Rules
 
 - Before reviewing requirements or making design/implementation decisions, check the worktree and fetch the configured remote. If the worktree is clean and the current branch has an upstream, fast-forward with `git pull --ff-only` and confirm the branch is current. Fetch alone does not update the checked-out files. If local edits, divergence, or conflicts prevent a safe fast-forward, preserve the work and coordinate with its owner before proceeding against possibly stale files.
 - Do not delete, rename, or replace this file. Preserve it across refactors and documentation updates.
-- Record every design decision and implementation change in this file as part of the same task. Keep entries concise, noting what changed and the relevant rationale or behavior; do not omit changes because they seem small.
-- When source documents conflict, record the conflict and chosen resolution here. Update this record if the source-of-truth decision changes.
+- Record only core cross-cutting decisions, such as architecture, shared contracts, security, or product behavior. Do not log routine implementation details or every file change.
+- When explicitly asked to maintain this file, record only core cross-cutting decisions and source-of-truth resolutions. Do not record routine feature work or every implementation change.
 - Distinguish approved decisions from unresolved product questions. Recording a resolution here does not mean the conflicting source documents or application have already been updated.
 
 ## System Components

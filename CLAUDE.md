@@ -118,7 +118,7 @@ sqlite3 todos.db
 
 ### Project Structure
 
-`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when adding or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. The repository now has an in-progress application scaffold; add remaining features within the existing hierarchy. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
+`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when adding or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. The repository now has an in-progress application scaffold; add remaining features within the existing hierarchy. If the hierarchy changes, update the README and both agent instruction files together.
 
 ### 1. Client vs Server Components
 - Main pages (`app/page.tsx`, `app/calendar/page.tsx`) are `'use client'` - they manage state and fetch from API routes
@@ -183,22 +183,15 @@ import { Priority, RecurrencePattern, Todo, Template } from '@/lib/db';
 
 ## Related Documentation
 
-- **`AGENT_SYNC.md`** - shared cross-agent system design decisions, dependency-safe build order, and resolved documentation conflicts. Read it before designing or implementing; update it with shared design decisions and implementation changes. **Do not delete or rename it.**
 - **`PRPs/`** - Product Requirement Prompts, one per feature (schema, endpoints, UI, edge cases, acceptance criteria, tests). Read the relevant PRP before implementing or modifying a feature. Start at `PRPs/README.md`.
 - **`USER_GUIDE.md`** - comprehensive user-facing feature documentation (2000+ lines)
 - **`EVALUATION.md`** - feature completeness checklist, acceptance criteria, and deployment (Railway/Vercel) guidance
 - **`.github/copilot-instructions.md`** - equivalent instructions written for GitHub Copilot; keep in sync with this file if either changes
 
-## Cross-Agent Synchronization
+## Team Collaboration
 
-### Team Workflow and Pitfalls
-
-- Before reviewing requirements or making design/implementation decisions, check `git status --short --branch`, fetch the configured remote, and, if the worktree is clean and the current branch has an upstream, run `git pull --ff-only`. Confirm the working branch is current; fetch alone does not update checked-out files.
-- If local edits, divergence, or conflicts prevent a safe fast-forward, preserve all work and coordinate with its owner before proceeding against possibly stale files. Never reset, discard, or overwrite another contributor's changes to make synchronization easier.
-- After synchronization, read the root `AGENT_SYNC.md`, relevant task-specific PRP, and README target hierarchy before planning or implementing. Resolve conflicts using the documented source of truth and record any new resolution in `AGENT_SYNC.md`.
-- Inspect status and diffs before editing and committing; stage only files for the current task unless explicitly asked to include more. Avoid simultaneous edits to shared contracts without coordinating ownership.
-- Keep user data scoped to `session.userId`, database access server-side, SQLite foreign keys enabled, and multi-table writes transactional. Use `lib/timezone.ts` for Singapore date/time behavior and test date-boundary cases.
-- Respect feature dependencies, including recurrence inheritance of tags/reminders and templates' subtask snapshots. Preserve the documented monolithic main todo page and root-level `PRPs/` layout.
-- This repository currently contains planning/reference docs only. Follow the README hierarchy when scaffolding, and do not claim builds/tests passed until the application exists and those checks have run.
-
-Update `AGENT_SYNC.md` in the same task with every design decision and implementation change, briefly recording what changed and its rationale or behavior. Never delete, rename, or replace `AGENT_SYNC.md`.
+- Before starting work, check `git status --short --branch` and fetch the configured remote. If the worktree is clean and the branch has an upstream, use `git pull --ff-only`; do not pull over local edits.
+- If local edits, divergence, or conflicts prevent a safe fast-forward, preserve all work and coordinate with its owner. Never reset, discard, or overwrite another contributor's changes.
+- Review status and diffs before editing and committing; stage only task-related files. Coordinate before parallel edits to shared contracts such as `lib/db.ts` and `app/page.tsx`.
+- Follow the relevant PRP and README hierarchy. Keep database access server-side, scope user data to `session.userId`, use prepared statements and transactions, and route application date/time logic through `lib/timezone.ts`.
+- Consult or update `AGENT_SYNC.md` only when the user explicitly asks. If asked to update it, record only core cross-cutting decisions, such as architecture, shared contracts, security, or product behavior; omit routine implementation details.
