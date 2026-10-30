@@ -14,8 +14,8 @@ This file records shared architectural decisions, resolved specification conflic
 
 The target is one Next.js 16 App Router application with React 19, Tailwind CSS 4, synchronous `better-sqlite3`, WebAuthn passkeys, and Playwright tests. It is not a set of independently deployed services.
 
-- **Identity and route protection:** WebAuthn registration/login, JWT session cookie, session utilities, and middleware. API handlers use the authenticated `session.userId` for all user-owned data.
-- **Persistence and shared types:** `lib/db.ts` owns the eight-table schema, interfaces, prepared statements, and CRUD objects. Enable SQLite foreign keys at connection initialization.
+- **Identity and route protection:** WebAuthn registration/login, JWT session cookie, session utilities, and Next.js 16 `proxy.ts`. API handlers use the authenticated `session.userId` for all user-owned data.
+- **Persistence and shared types:** `lib/db.ts` owns the eight application tables plus the auth challenge table, interfaces, prepared statements, and CRUD objects. Enable SQLite foreign keys at connection initialization.
 - **Time handling:** `lib/timezone.ts` is the shared boundary for Singapore (`Asia/Singapore`) date/time calculations.
 - **Feature API and domain logic:** Todo CRUD, priority/sorting, recurring instances, reminders, subtasks, tags, templates, import/export, and holidays.
 - **Client experience:** A main client todo page owns list workflows and feature UI; separate login and calendar pages provide authentication and calendar views. Keep the main todo page monolithic as specified by project conventions.
@@ -23,7 +23,7 @@ The target is one Next.js 16 App Router application with React 19, Tailwind CSS 
 
 ## Project Structure
 
-`README.md` section 4, **Project Structure Verification**, is the canonical target hierarchy. Keep `PRPs/` at the repository root; `.github/` contains Copilot instructions, not PRPs. The current repository is planning/reference documentation only, so scaffold the application hierarchy at the repository root when implementation begins. Any future hierarchy change must update the README and both agent instruction files in the same task.
+`README.md` section 4, **Project Structure Verification**, is the canonical target hierarchy. Keep `PRPs/` at the repository root; `.github/` contains Copilot instructions, not PRPs. The repository now has an in-progress Next.js application scaffold at the root; add remaining code within that hierarchy. Any future hierarchy change must update the README and both agent instruction files in the same task.
 
 ## Dependency-Safe Build Order
 
@@ -91,7 +91,7 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 
 ## Verification and Evaluation Gates
 
-- Create all eight tables and enable `PRAGMA foreign_keys = ON`.
+- Create all eight application tables plus the auth challenge table and enable `PRAGMA foreign_keys = ON`.
 - Implement every route in the one-shot API surface plus the approved authenticated passkey-enrollment flow. Authenticate protected APIs first and scope all user-owned reads/writes by `session.userId`; apply the public authentication exceptions above.
 - Route Singapore-time-sensitive calculations through `lib/timezone.ts`; do not use raw `new Date()` for application date/time logic.
 - Pass production build, lint, and TypeScript checks; leave no `console.log` in shipped code.
@@ -102,6 +102,22 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 - Check WebAuthn/session security, input validation, prepared SQL, cookie attributes, CSRF/rate limiting expectations, accessible controls/contrast, and responsive behavior.
 - MVP evaluation includes a working HTTPS deployment, persistent database, production authentication, all core features, passing E2E tests, and no critical bugs. SQLite persistence must be considered when choosing a deployment platform; the deployment docs favor Railway with a persistent volume over Vercel's ephemeral filesystem.
 - Target an initial single Railway application instance with a persistent SQLite volume and configurable database path. Verify data survives restart and redeployment, exercise backup/restore, and smoke-test production passkeys on the configured HTTPS origin. Vercel's ephemeral filesystem alone does not satisfy persistence.
+
+## PRP 11 Implementation Progress
+
+- Bootstrapped the documented Next.js 16 / React 19 / Tailwind 4 / TypeScript app tooling while preserving the existing planning documents.
+- Added the eight shared application tables plus `auth_challenges`. Challenges are persisted in SQLite, expire after five minutes, and are consumed transactionally once; this resolves PRP 11's unspecified in-memory challenge lifecycle and supports restarts.
+- Implemented JWT session helpers with seven-day expiry, HTTP-only/SameSite=Lax cookies, Secure in production, and fail-closed verification. Auth POST routes enforce the configured same-origin `RP_ORIGIN`; rate limiting remains out of scope per PRP 11 and should be addressed before public production exposure.
+- Implemented WebAuthn using the installed SimpleWebAuthn v13 contract (`credential.id`, `credential.publicKey`, and `credential` verification options), while preserving base64url credential IDs and explicit zero-counter handling.
+- WebAuthn user handles are random opaque UUIDs stored per user; database initialization backfills them for pre-existing rows. Additional-passkey verification rechecks that the issuing session is still active and belongs to the challenge user.
+- Authenticated registration repairs and persists a missing legacy user handle before issuing options. Logout only redirects after the server confirms the session cookie was cleared; request failures remain visible for retry.
+- Authenticator counter persistence is a conditional monotonic SQLite update, so concurrent assertions cannot lower the stored counter. User-plus-authenticator creation is transactional and covered by a rollback test.
+- Resolved the PRP's multiple-authenticator gap: unauthenticated duplicate registration remains a 409, while a signed-in user can register another authenticator for their own username; existing credentials are sent as `excludeCredentials`.
+- Added unit/API tests and Chromium virtual-authenticator journeys for registration, login, session persistence, logout, protected redirects, duplicate registration, replay/counter rejection, and a second authenticator.
+- Next 16 deprecates the `middleware.ts` filename in favor of `proxy.ts`; route protection is implemented in `proxy.ts` for `/`, `/calendar`, and `/login`, including unauthenticated redirects and authenticated-login redirects. The PRP's `middleware.ts` references are treated as the route-protection requirement.
+- Username-first WebAuthn options and the required duplicate-registration 409 reveal account existence/credential IDs. This is a protocol/spec tradeoff; rate limiting remains out of scope in PRP 11, so revisit both before public production exposure.
+- Sessions are stateless JWTs: logout clears the current browser's cookie, but a copied token remains valid until its seven-day expiry.
+- Final verification for this implementation slice: 43 Vitest tests with at least 80% coverage in all metrics, typecheck, lint, production build, and virtual-authenticator Playwright journeys pass.
 
 ## Known Documentation Mismatches
 
@@ -117,7 +133,7 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 - **Stale checkout:** Remote commits may change requirements, APIs, or files while an agent is starting. Check `git status --short --branch`, fetch the configured remote, and fast-forward with `git pull --ff-only` before reviewing task requirements or making design/implementation decisions. Do not mistake `git fetch` alone for updating the working tree.
 - **Concurrent edits lost or accidentally included:** Inspect status and diffs before editing and before committing. Preserve work you did not create; never use reset/checkout or other destructive commands to clear conflicts. Stage only files belonging to the current task unless explicitly asked otherwise. If a safe update is blocked by local edits or branch divergence, coordinate rather than guessing.
 - **Conflicting or obsolete requirements:** Read this file, the relevant PRP, and the README hierarchy after synchronizing. Treat explicit resolutions here and in the one-shot spec as controlling; do not silently merge contradictory requirements. Record new decisions and update the shared source documents as required.
-- **Files created in the wrong place:** Follow the README target hierarchy. Keep PRPs at the repository root, not under `.github/`; keep application code, shared logic, tests, and scripts in `app/`, `lib/`, `tests/`, and `scripts/` respectively. The current repository is documentation-only, so scaffold before assuming source code or test commands exist.
+- **Files created in the wrong place:** Follow the README target hierarchy. Keep PRPs at the repository root, not under `.github/`; keep application code, shared logic, tests, and scripts in `app/`, `lib/`, `tests/`, and `scripts/` respectively. The application scaffold now exists; inspect current files before adding more source or changing setup.
 - **Cross-feature contract breaks:** Keep user data scoped to `session.userId`; keep database access server-side; use prepared statements and enable SQLite foreign keys. Use transactions for multi-table operations such as import. Recurrence must carry forward tags and reminder settings, and templates must preserve their specified subtask snapshot.
 - **Timezone/date regressions:** Route application date/time calculations through `lib/timezone.ts`. Test recurrence month-end/leap-year behavior and Singapore calendar boundaries rather than relying on local machine timezone.
 - **Unverified changes:** Use tests and checks appropriate to the changed layer: unit/integration for domain and persistence logic, Playwright for critical user flows, plus build/lint/type checks. Do not claim tests pass when the app has not yet been scaffolded or the checks were not run.
