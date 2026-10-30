@@ -2,9 +2,7 @@
 
 ## ⚠️ Current Repository State
 
-This repository currently contains **planning and reference documentation only** — `README.md`, `USER_GUIDE.md`, `EVALUATION.md`, `PRPs/*.md`, and `.github/copilot-instructions.md` describe the **target implementation** of a Todo App. The actual Next.js source code (`app/`, `lib/`, `middleware.ts`, `package.json`, `tests/`, etc.) does not exist in this repo yet.
-
-Everything below describes the architecture and conventions the app **must follow once implemented**. When asked to build or extend a feature, scaffold the project structure described here rather than assuming it already exists — check with `ls`/`find` first.
+This repository contains planning/reference documentation and an in-progress Next.js implementation. The implemented authentication slice lives in `app/`, `lib/`, and `proxy.ts`; the remaining todo features are still planned in `PRPs/`.
 
 ## Architecture Overview
 
@@ -23,7 +21,7 @@ A **Next.js 16** todo application with WebAuthn authentication, using **better-s
 - **WebAuthn only** - no traditional passwords
 - Uses `@simplewebauthn/server` and `@simplewebauthn/browser` libraries
 - Session tokens stored as HTTP-only cookies via `lib/auth.ts` (JWT with 7-day expiry)
-- Middleware (`middleware.ts`) protects `/` and `/calendar` routes
+- Proxy (`proxy.ts`) protects `/` and `/calendar` routes, following the Next.js 16 convention
 - When modifying authenticator logic, **always use `?? 0` for counter field** to handle undefined values:
   ```typescript
   counter: authenticator.counter ?? 0
@@ -120,7 +118,7 @@ sqlite3 todos.db
 
 ### Project Structure
 
-`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when scaffolding, adding, or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. This repository currently contains planning/reference documentation only; create the target application structure at the repository root when implementation begins. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
+`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when adding or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. The repository now has an in-progress application scaffold; add remaining features within the existing hierarchy. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
 
 ### 1. Client vs Server Components
 - Main pages (`app/page.tsx`, `app/calendar/page.tsx`) are `'use client'` - they manage state and fetch from API routes
@@ -176,7 +174,7 @@ import { Priority, RecurrencePattern, Todo, Template } from '@/lib/db';
 
 ## File Reference (target layout)
 
-- **Auth**: `lib/auth.ts`, `middleware.ts`, `app/api/auth/**`
+- **Auth**: `lib/auth.ts`, `proxy.ts`, `app/api/auth/**`
 - **Database**: `lib/db.ts` (single file, ~700 lines)
 - **Timezone**: `lib/timezone.ts`
 - **Main UI**: `app/page.tsx` (~2200 lines, feature-rich)

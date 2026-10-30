@@ -17,7 +17,7 @@ This is a **Next.js 16** todo application with WebAuthn authentication, using **
 - **WebAuthn only** - no traditional passwords
 - Uses `@simplewebauthn/server` and `@simplewebauthn/browser` libraries
 - Session tokens stored as HTTP-only cookies via `lib/auth.ts` (JWT with 7-day expiry)
-- Middleware (`middleware.ts`) protects `/` and `/calendar` routes
+- Proxy (`proxy.ts`) protects `/` and `/calendar` routes
 - When modifying authenticator logic, **always use `?? 0` for counter field** to handle undefined values:
   ```typescript
   counter: authenticator.counter ?? 0
@@ -114,7 +114,7 @@ sqlite3 todos.db
 
 ### Project Structure
 
-`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when scaffolding, adding, or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. This repository currently contains planning/reference documentation only; create the target application structure at the repository root when implementation begins. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
+`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when adding or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. The repository now has an in-progress application scaffold; add remaining features within the existing hierarchy. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
 
 ### 1. Client vs Server Components
 - Main pages (`app/page.tsx`, `app/calendar/page.tsx`) are `'use client'` - they manage state and fetch from API routes
@@ -189,7 +189,7 @@ Update `AGENT_SYNC.md` in the same task with every design decision and implement
 
 ## File Reference
 
-- **Auth**: `lib/auth.ts`, `middleware.ts`, `app/api/auth/**`
+- **Auth**: `lib/auth.ts`, `proxy.ts`, `app/api/auth/**`
 - **Database**: `lib/db.ts` (single file, ~700 lines)
 - **Timezone**: `lib/timezone.ts`
 - **Main UI**: `app/page.tsx` (~2200 lines, feature-rich)

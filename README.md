@@ -202,7 +202,7 @@ added 345 packages, and audited 346 packages in 45s
 ```
 
 ### Project Structure Verification
-The repository currently contains planning and reference documentation. When scaffolding the application, use this target hierarchy at the repository root. PRPs are kept in the root `PRPs/` directory, not under `.github/`.
+Use this target hierarchy at the repository root when adding features. PRPs are kept in the root `PRPs/` directory, not under `.github/`; the authentication foundation is already implemented.
 
 ```
 todo-app/
@@ -229,7 +229,7 @@ todo-app/
 ├── tests/
 │   ├── helpers.ts
 │   └── *.spec.ts
-├── middleware.ts
+├── proxy.ts
 ├── package.json
 ├── next.config.ts
 ├── playwright.config.ts
