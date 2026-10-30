@@ -119,6 +119,19 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 - Sessions are stateless JWTs: logout clears the current browser's cookie, but a copied token remains valid until its seven-day expiry.
 - Final verification for this implementation slice: 43 Vitest tests with at least 80% coverage in all metrics, typecheck, lint, production build, and virtual-authenticator Playwright journeys pass.
 
+## PRP 01 Implementation Progress
+
+- Added user-scoped todo persistence with prepared statements, batched subtask/tag loading, transactional tag assignment, partial updates, and SQLite cascade deletion. Item reads, updates, and deletes include `user_id` in their database predicates.
+- Added authenticated collection/item routes with strict Zod validation, same-origin checks for mutations, trimmed non-empty titles, enumerated priority/reminder/recurrence values, and `404` responses for missing or foreign-owned todos.
+- Mutating todo requests are read with a 64 KiB streaming JSON limit before parsing. Typed `TodoValidationError` failures return `400`; unexpected persistence failures return a generic `500` without exposing internals. No title-specific server maximum was introduced, preserving the CRUD PRP’s long-title behavior.
+- Due dates from Singapore `datetime-local` inputs are parsed explicitly as Singapore time and stored as canonical UTC ISO strings. New or changed interactive deadlines must be at least one minute ahead; unchanged historical deadlines remain editable. This follows the timestamp contract and approved deadline clarification above.
+- Existing timestamped tables are normalized to canonical UTC ISO values at database initialization; todo/auth inserts write explicit UTC ISO timestamps so legacy table defaults cannot reintroduce the old SQLite datetime representation. Todo recurrence/reminder invariants are checked again inside the database update transaction to protect merged state.
+- Added pure priority/due/creation sorting and Overdue/Pending/Completed sectioning; exact-now deadlines remain Pending and completed rows sort by last update.
+- Replaced the authenticated home placeholder with create/edit/toggle/delete flows, optimistic updates with rollback, metadata controls, immediate deletion without confirmation, and a focus-managed edit dialog. Creation waits for the initial list request; completion mutations are serialized per todo.
+- Resolved the evaluation checklist conflicts in favor of the detailed behavior specs: label the section “Pending” (not “Active”) and delete immediately without a confirmation dialog.
+- Added Vitest database/date/route coverage and Playwright CRUD journeys; Playwright runs with `Asia/Singapore` timezone. The CRUD suite covers create/edit/cancel/complete/reopen/delete, metadata, optimistic rollback for create/edit/toggle/delete, delayed initial loading, failed-load retry, and focus retention after section moves. Todo creation remains disabled until initial loading succeeds.
+- Final verification: 76 Vitest tests pass with coverage thresholds met; all 10 auth/CRUD Playwright tests pass; TypeScript, ESLint, production build, and changed-file diagnostics pass.
+
 ## Known Documentation Mismatches
 
 - The PRP index groups authentication last or parallel, while the one-shot and API contract require it first.

@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { getSingaporeNow } from './timezone'
+import { TodoValidationError } from './todo-errors'
 
 export type Priority = 'high' | 'medium' | 'low'
 export type RecurrencePattern = 'daily' | 'weekly' | 'monthly' | 'yearly'
@@ -43,6 +45,29 @@ export interface Todo {
   updated_at: string | null
   subtasks?: Subtask[]
   tags?: Tag[]
+}
+
+export interface CreateTodoInput {
+  user_id: number
+  title: string
+  due_date?: string | null
+  priority?: Priority
+  completed?: boolean
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePattern | null
+  reminder_minutes?: number | null
+  tag_ids?: number[]
+}
+
+export interface UpdateTodoInput {
+  title?: string
+  due_date?: string | null
+  priority?: Priority
+  completed?: boolean
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePattern | null
+  reminder_minutes?: number | null
+  tag_ids?: number[]
 }
 
 export interface Subtask {
@@ -107,7 +132,7 @@ const schema = `
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
     webauthn_user_id TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS authenticators (
@@ -116,7 +141,7 @@ const schema = `
     credential_id TEXT UNIQUE NOT NULL,
     credential_public_key BLOB NOT NULL,
     counter INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   CREATE INDEX IF NOT EXISTS idx_authenticators_user_id ON authenticators(user_id);
 
@@ -131,7 +156,7 @@ const schema = `
     recurrence_pattern TEXT,
     reminder_minutes INTEGER,
     last_notification_sent TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_todos_user_id ON todos(user_id);
@@ -143,7 +168,7 @@ const schema = `
     title TEXT NOT NULL,
     completed INTEGER NOT NULL DEFAULT 0,
     position INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   CREATE INDEX IF NOT EXISTS idx_subtasks_todo_id ON subtasks(todo_id);
 
@@ -152,7 +177,7 @@ const schema = `
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     color TEXT NOT NULL DEFAULT '#3B82F6',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE(user_id, name)
   );
 
@@ -175,14 +200,14 @@ const schema = `
     reminder_minutes INTEGER,
     due_date_offset_minutes INTEGER,
     subtasks_json TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS holidays (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
     name TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_holidays_date ON holidays(date);
 
@@ -203,6 +228,18 @@ export function createDatabase(filePath: string): Database.Database {
   database.exec(schema)
   ensureColumn(database, 'users', 'webauthn_user_id', 'TEXT')
   ensureColumn(database, 'auth_challenges', 'user_handle', 'TEXT')
+  for (const table of ['users', 'authenticators', 'todos', 'subtasks', 'tags', 'templates', 'holidays']) {
+    database.prepare(`
+      UPDATE ${table}
+      SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
+      WHERE created_at NOT LIKE '%Z'
+    `).run()
+  }
+  database.prepare(`
+    UPDATE todos
+    SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)
+    WHERE updated_at IS NOT NULL AND updated_at NOT LIKE '%Z'
+  `).run()
   const usersWithoutHandle = database.prepare('SELECT id FROM users WHERE webauthn_user_id IS NULL').all() as Array<{ id: number }>
   const updateUserHandle = database.prepare('UPDATE users SET webauthn_user_id = ? WHERE id = ?')
   for (const user of usersWithoutHandle) {
@@ -219,12 +256,183 @@ function ensureColumn(database: Database.Database, table: string, column: string
   }
 }
 
+interface TodoRow extends Omit<Todo, 'completed' | 'is_recurring'> {
+  completed: number
+  is_recurring: number
+}
+
+interface SubtaskRow extends Omit<Subtask, 'completed'> {
+  completed: number
+}
+
+function mapTodoRow(row: TodoRow): Todo {
+  return { ...row, completed: Boolean(row.completed), is_recurring: Boolean(row.is_recurring) }
+}
+
+function assertTodoConfiguration(
+  dueDate: string | null,
+  isRecurring: boolean,
+  recurrencePattern: RecurrencePattern | null,
+  reminderMinutes: number | null,
+): void {
+  if (isRecurring && (!dueDate || !recurrencePattern)) {
+    throw new TodoValidationError('Recurring todos require a due date and pattern')
+  }
+  if (reminderMinutes !== null && !dueDate) {
+    throw new TodoValidationError('Reminders require a due date')
+  }
+}
+
+export function createTodoDB(database: Database.Database) {
+  function withRelations(rows: TodoRow[]): Todo[] {
+    if (rows.length === 0) return []
+
+    const todoIds = rows.map(({ id }) => id)
+    const placeholders = todoIds.map(() => '?').join(', ')
+    const subtasks = database.prepare(`
+      SELECT id, todo_id, title, completed, position, created_at
+      FROM subtasks WHERE todo_id IN (${placeholders})
+      ORDER BY position, id
+    `).all(...todoIds) as SubtaskRow[]
+    const tags = database.prepare(`
+      SELECT tags.id, tags.user_id, tags.name, tags.color, tags.created_at, todo_tags.todo_id
+      FROM tags INNER JOIN todo_tags ON todo_tags.tag_id = tags.id
+      WHERE todo_tags.todo_id IN (${placeholders})
+      ORDER BY tags.name COLLATE NOCASE
+    `).all(...todoIds) as Array<Tag & { todo_id: number }>
+    const subtasksByTodo = new Map<number, Subtask[]>()
+    const tagsByTodo = new Map<number, Tag[]>()
+
+    for (const subtask of subtasks) {
+      const current = subtasksByTodo.get(subtask.todo_id) ?? []
+      current.push({ ...subtask, completed: Boolean(subtask.completed) })
+      subtasksByTodo.set(subtask.todo_id, current)
+    }
+    for (const { todo_id, ...tag } of tags) {
+      const current = tagsByTodo.get(todo_id) ?? []
+      current.push(tag)
+      tagsByTodo.set(todo_id, current)
+    }
+
+    return rows.map((row) => ({
+      ...mapTodoRow(row),
+      subtasks: subtasksByTodo.get(row.id) ?? [],
+      tags: tagsByTodo.get(row.id) ?? [],
+    }))
+  }
+
+  function findById(id: number, userId: number): Todo | null {
+    const row = database.prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(id, userId) as TodoRow | undefined
+    return row ? withRelations([row])[0] : null
+  }
+
+  function replaceTags(todoId: number, userId: number, tagIds: number[]): void {
+    const uniqueIds = [...new Set(tagIds)]
+    if (uniqueIds.length > 0) {
+      const placeholders = uniqueIds.map(() => '?').join(', ')
+      const result = database.prepare(`
+        SELECT COUNT(*) AS count FROM tags WHERE user_id = ? AND id IN (${placeholders})
+      `).get(userId, ...uniqueIds) as { count: number }
+      if (result.count !== uniqueIds.length) throw new TodoValidationError('One or more tags are not available')
+    }
+
+    database.prepare('DELETE FROM todo_tags WHERE todo_id = ?').run(todoId)
+    const insertTag = database.prepare('INSERT INTO todo_tags (todo_id, tag_id) VALUES (?, ?)')
+    for (const tagId of uniqueIds) insertTag.run(todoId, tagId)
+  }
+
+  return {
+    create(input: CreateTodoInput): Todo {
+      const createTransaction = database.transaction(() => {
+        const dueDate = input.due_date ?? null
+        const isRecurring = input.is_recurring ?? false
+        const recurrencePattern = input.recurrence_pattern ?? null
+        const reminderMinutes = input.reminder_minutes ?? null
+        assertTodoConfiguration(dueDate, isRecurring, recurrencePattern, reminderMinutes)
+        const result = database.prepare(`
+          INSERT INTO todos (
+            user_id, title, completed, due_date, priority, is_recurring,
+            recurrence_pattern, reminder_minutes, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          input.user_id,
+          input.title,
+          input.completed ? 1 : 0,
+          dueDate,
+          input.priority ?? 'medium',
+          isRecurring ? 1 : 0,
+          recurrencePattern,
+          reminderMinutes,
+          getSingaporeNow().toISOString(),
+        )
+        const id = Number(result.lastInsertRowid)
+        if (input.tag_ids) replaceTags(id, input.user_id, input.tag_ids)
+        return findById(id, input.user_id)!
+      })
+      return createTransaction()
+    },
+
+    findAllByUser(userId: number): Todo[] {
+      const rows = database.prepare('SELECT * FROM todos WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(userId) as TodoRow[]
+      return withRelations(rows)
+    },
+
+    findById,
+
+    update(id: number, userId: number, input: UpdateTodoInput): Todo | null {
+      const assignments: string[] = []
+      const values: unknown[] = []
+      const addField = (column: string, value: unknown) => {
+        assignments.push(`${column} = ?`)
+        values.push(value)
+      }
+
+      if (input.title !== undefined) addField('title', input.title)
+      if (input.completed !== undefined) addField('completed', input.completed ? 1 : 0)
+      if (input.due_date !== undefined) addField('due_date', input.due_date)
+      if (input.priority !== undefined) addField('priority', input.priority)
+      if (input.is_recurring !== undefined) addField('is_recurring', input.is_recurring ? 1 : 0)
+      if (input.recurrence_pattern !== undefined) addField('recurrence_pattern', input.recurrence_pattern)
+      if (input.reminder_minutes !== undefined) addField('reminder_minutes', input.reminder_minutes)
+
+      const updateTransaction = database.transaction(() => {
+        const current = findById(id, userId)
+        if (!current) return null
+        assertTodoConfiguration(
+          input.due_date === undefined ? current.due_date : input.due_date,
+          input.is_recurring === undefined ? current.is_recurring : input.is_recurring,
+          input.recurrence_pattern === undefined ? current.recurrence_pattern : input.recurrence_pattern,
+          input.reminder_minutes === undefined ? current.reminder_minutes : input.reminder_minutes,
+        )
+        const hasTagChanges = input.tag_ids !== undefined
+        if (assignments.length > 0 || hasTagChanges) {
+          addField('updated_at', getSingaporeNow().toISOString())
+          database.prepare(`
+            UPDATE todos SET ${assignments.join(', ')} WHERE id = ? AND user_id = ?
+          `).run(...values, id, userId)
+          if (hasTagChanges) replaceTags(id, userId, input.tag_ids ?? [])
+        }
+        return findById(id, userId)
+      })
+      return updateTransaction()
+    },
+
+    delete(id: number, userId: number): boolean {
+      const result = database.prepare('DELETE FROM todos WHERE id = ? AND user_id = ?').run(id, userId)
+      return result.changes === 1
+    },
+  }
+}
+
 export const db = createDatabase(process.env.DATABASE_PATH ?? join(process.cwd(), 'todos.db'))
+export const todoDB = createTodoDB(db)
 
 export function createAuthDataDB(database: Database.Database) {
   const users = {
     create(username: string, userHandle: string = randomUUID()): User {
-      const result = database.prepare('INSERT INTO users (username, webauthn_user_id) VALUES (?, ?)').run(username, userHandle)
+      const result = database.prepare(`
+        INSERT INTO users (username, webauthn_user_id, created_at) VALUES (?, ?, ?)
+      `).run(username, userHandle, getSingaporeNow().toISOString())
       return users.findById(Number(result.lastInsertRowid))!
     },
 
@@ -251,9 +459,9 @@ export function createAuthDataDB(database: Database.Database) {
   const authenticators = {
     create(userId: number, credentialId: string, credentialPublicKey: Buffer, counter: number): Authenticator {
       const result = database.prepare(`
-        INSERT INTO authenticators (user_id, credential_id, credential_public_key, counter)
-        VALUES (?, ?, ?, ?)
-      `).run(userId, credentialId, credentialPublicKey, counter ?? 0)
+        INSERT INTO authenticators (user_id, credential_id, credential_public_key, counter, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(userId, credentialId, credentialPublicKey, counter ?? 0, getSingaporeNow().toISOString())
       return database.prepare('SELECT * FROM authenticators WHERE id = ?').get(Number(result.lastInsertRowid)) as Authenticator
     },
 

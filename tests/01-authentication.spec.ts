@@ -20,7 +20,7 @@ async function createAccount(page: Page, username: string) {
   await page.getByLabel('Username').fill(username)
   await page.getByRole('button', { name: 'Create account' }).click()
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('heading', { name: `Welcome, ${username}.` })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Today, in focus.' })).toBeVisible()
 }
 
 function uniqueUsername() {
@@ -36,7 +36,7 @@ test('registers, persists a session, logs out, protects routes, and logs in', as
   await page.getByLabel('Username').fill(username)
   await page.getByRole('button', { name: 'Create account' }).click()
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('heading', { name: `Welcome, ${username}.` })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Today, in focus.' })).toBeVisible()
 
   await page.reload()
   await expect(page).toHaveURL('/')
@@ -91,7 +91,7 @@ test('registers a second authenticator and can log in with it', async ({ page })
   await page.getByLabel('Username').fill(username)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page).toHaveURL('/')
-  await expect(page.getByRole('heading', { name: `Welcome, ${username}.` })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Today, in focus.' })).toBeVisible()
 
   await secondCdp.detach()
 })

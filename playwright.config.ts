@@ -12,6 +12,7 @@ export default defineConfig({
     ...devices['Desktop Chrome'],
     baseURL,
     headless: true,
+    timezoneId: 'Asia/Singapore',
     trace: 'retain-on-failure',
   },
   webServer: {
