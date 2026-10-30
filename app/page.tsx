@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent, KeyboardEvent } from 'react'
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react'
 import { AddPasskeyButton } from './AddPasskeyButton'
 import { LogoutButton } from './LogoutButton'
 import type { Priority, RecurrencePattern, Subtask, Tag, Todo } from '@/lib/db'
@@ -75,9 +75,12 @@ export default function HomePage() {
   const [tagDraftColor, setTagDraftColor] = useState('#3B82F6')
   const [tagDraftEditingId, setTagDraftEditingId] = useState<number | null>(null)
   const [tagModalError, setTagModalError] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importMessage, setImportMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const editDialogRef = useRef<HTMLElement | null>(null)
+  const importFileRef = useRef<HTMLInputElement | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const focusTodoIdRef = useRef<number | null>(null)
   const [filters, setFilters] = useState<FilterState>({ ...DEFAULT_FILTER_STATE })
@@ -223,6 +226,49 @@ export default function HomePage() {
     setFilters((current) => current.tagId === 'all' || tags.some((tag) => tag.id === current.tagId)
       ? current : { ...current, tagId: 'all' })
     return tags
+  }
+
+  function downloadTodos(format: 'json' | 'csv') {
+    window.location.assign(`/api/todos/export?format=${format}`)
+  }
+
+  async function importTodos(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    if (!file) return
+
+    const isLargeImport = file.size > 10 * 1024 * 1024
+    setImporting(true)
+    setImportMessage(isLargeImport
+      ? { type: 'info', text: 'This large file may take a while to import.' }
+      : null)
+
+    try {
+      let payload: unknown
+      try {
+        payload = JSON.parse(await file.text()) as unknown
+      } catch {
+        throw new SyntaxError('Invalid JSON format')
+      }
+
+      const response = await fetch('/api/todos/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = await readResponse<{ imported: number }>(response)
+      const notice = isLargeImport ? 'This large file may take a while to import. ' : ''
+      setImportMessage({ type: 'success', text: `${notice}Successfully imported ${result.imported} todos` })
+      setLoadAttempt((current) => current + 1)
+    } catch (error) {
+      setImportMessage({
+        type: 'error',
+        text: error instanceof Error ? error.message : 'Failed to import todos',
+      })
+    } finally {
+      setImporting(false)
+      input.value = ''
+    }
   }
 
   function startEditing(todo: Todo) {
@@ -960,8 +1006,34 @@ export default function HomePage() {
         {!editingTodo && renderTodoForm()}
         <div className="todo-list-heading">
           <h2>Your tasks</h2>
-          <span>{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit' }).format(now)} SGT</span>
+          <div className="todo-list-controls">
+            <span>{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit' }).format(now)} SGT</span>
+            <div className="export-import-toolbar" aria-label="Export and import todos">
+              <button className="secondary-button export-action" onClick={() => downloadTodos('json')} type="button">Export JSON</button>
+              <button className="secondary-button export-action" onClick={() => downloadTodos('csv')} type="button">Export CSV</button>
+              <button className="primary-button import-action" disabled={importing} onClick={() => importFileRef.current?.click()} type="button">
+                {importing ? 'Importing...' : 'Import'}
+              </button>
+              <input
+                accept="application/json,.json"
+                aria-label="Choose JSON backup to import"
+                className="import-file-input"
+                onChange={(event) => void importTodos(event)}
+                ref={importFileRef}
+                type="file"
+              />
+            </div>
+          </div>
         </div>
+        <p className="import-guidance">Import creates new todos and does not merge with existing ones.</p>
+        {importMessage && (
+          <p
+            className={`import-message import-message-${importMessage.type}`}
+            role={importMessage.type === 'error' ? 'alert' : 'status'}
+          >
+            {importMessage.text}
+          </p>
+        )}
         <section aria-label="Search and filter todos" className="filter-toolbar">
           <div className="filter-search">
             <label className="todo-field">

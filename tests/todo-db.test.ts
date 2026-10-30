@@ -237,6 +237,79 @@ describe('todo database operations', () => {
     expect(subtaskDB.create(todo.id, otherId, { title: 'Not allowed' })).toBeNull()
   })
 
+  it('imports todos transactionally, remaps relations, and reuses tags case-insensitively', () => {
+    const { database, todoDB } = createStore()
+    const userId = createTodoUser(database, 'importer')
+    const existing = todoDB.create({ user_id: userId, title: 'Existing task' })
+    const existingTagId = Number(database.prepare(
+      'INSERT INTO tags (user_id, name, color) VALUES (?, ?, ?)',
+    ).run(userId, 'Work', '#1166AA').lastInsertRowid)
+
+    const result = todoDB.importAll(userId, [{
+      title: 'Imported project',
+      completed: true,
+      due_date: '2026-12-01T10:00:00.000Z',
+      priority: 'high',
+      is_recurring: true,
+      recurrence_pattern: 'weekly',
+      reminder_minutes: 30,
+      created_at: '2026-10-29T00:00:00.000Z',
+      subtasks: [
+        { title: 'First step', completed: true, position: 9 },
+        { title: 'Second step', completed: false, position: 3 },
+      ],
+      tags: [
+        { name: 'work', color: '#FFFFFF' },
+        { name: 'Research', color: '#22AA66' },
+      ],
+    }])
+    const imported = todoDB.findAllByUser(userId).find(({ title }) => title === 'Imported project')
+
+    expect(result).toEqual({ imported: 1, tagsCreated: 1, tagsReused: 1 })
+    expect(imported?.id).not.toBe(existing.id)
+    expect(imported).toMatchObject({
+      completed: true,
+      due_date: '2026-12-01T10:00:00.000Z',
+      priority: 'high',
+      is_recurring: true,
+      recurrence_pattern: 'weekly',
+      reminder_minutes: 30,
+      created_at: '2026-10-29T00:00:00.000Z',
+      subtasks: [
+        { title: 'First step', completed: true, position: 0 },
+        { title: 'Second step', completed: false, position: 1 },
+      ],
+      tags: [
+        { name: 'Research', color: '#22AA66' },
+        { id: existingTagId, name: 'Work', color: '#1166AA' },
+      ],
+    })
+  })
+
+  it('rolls back every imported row when a transactional insert fails', () => {
+    const { database, todoDB } = createStore()
+    const userId = createTodoUser(database, 'importer')
+    database.exec(`
+      CREATE TRIGGER reject_import BEFORE INSERT ON todos
+      WHEN NEW.title = 'Reject this row'
+      BEGIN SELECT RAISE(ABORT, 'Import rejected'); END;
+    `)
+
+    expect(() => todoDB.importAll(userId, [
+      {
+        title: 'Valid first row', completed: false, due_date: null, priority: 'medium',
+        is_recurring: false, recurrence_pattern: null, reminder_minutes: null,
+        created_at: '2026-10-30T00:00:00.000Z', subtasks: [], tags: [],
+      },
+      {
+        title: 'Reject this row', completed: false, due_date: null, priority: 'medium',
+        is_recurring: false, recurrence_pattern: null, reminder_minutes: null,
+        created_at: '2026-10-30T00:00:00.000Z', subtasks: [], tags: [],
+      },
+    ])).toThrow('Import rejected')
+    expect(todoDB.findAllByUser(userId)).toEqual([])
+  })
+
   it('normalizes todo timestamps when opening a legacy SQLite database', () => {
     const directory = mkdtempSync(join(tmpdir(), 'todo-legacy-'))
     directories.push(directory)
