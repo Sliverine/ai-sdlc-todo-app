@@ -1,15 +1,18 @@
 ﻿'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { AddPasskeyButton } from './AddPasskeyButton'
 import { LogoutButton } from './LogoutButton'
-import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Tag, Todo } from '@/lib/db'
+import type { Priority, RecurrencePattern, Subtask, Tag, Todo } from '@/lib/db'
 import { calculateProgress, sectionTodos } from '@/lib/todo-utils'
 import { useNotifications } from '@/lib/hooks/useNotifications'
 import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/reminders'
 import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
+import { applyFilters, DEFAULT_FILTER_STATE, hasActiveFilters, type FilterState } from '@/lib/filters'
+import { deletePreset, loadPresets, savePreset, type FilterPreset } from '@/lib/filter-presets'
+import { useDebounce } from '@/lib/hooks/useDebounce'
 
 interface TodoForm {
   title: string
@@ -77,8 +80,73 @@ export default function HomePage() {
   const editDialogRef = useRef<HTMLElement | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const focusTodoIdRef = useRef<number | null>(null)
-  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all')
+  const [filters, setFilters] = useState<FilterState>({ ...DEFAULT_FILTER_STATE })
+  const [advancedExpanded, setAdvancedExpanded] = useState(false)
+  const [presets, setPresets] = useState<FilterPreset[]>([])
+  const [presetName, setPresetName] = useState('')
+  const [presetError, setPresetError] = useState<string | null>(null)
+  const [filterNotice, setFilterNotice] = useState<string | null>(null)
+  const presetDialogRef = useRef<HTMLDialogElement | null>(null)
+  const { value: debouncedSearch, flush: flushSearch } = useDebounce(filters.search)
+  const selectedTagId = filters.tagId === 'all' || availableTags.some((tag) => tag.id === filters.tagId)
+    ? filters.tagId : 'all'
+  const activeFilters = { ...filters, tagId: selectedTagId }
+  const filtersActive = hasActiveFilters(activeFilters)
+  const { priority, completion, dueDateFrom, dueDateTo } = filters
+  const filteredTodos = useMemo(() => applyFilters(todos, {
+    priority, completion, dueDateFrom, dueDateTo, search: debouncedSearch, tagId: selectedTagId,
+  }), [todos, priority, completion, dueDateFrom, dueDateTo, selectedTagId, debouncedSearch])
   const notifications = useNotifications(!loading && !loadFailed)
+
+  function replaceFilters(next: FilterState) {
+    setFilters({ ...next })
+    flushSearch(next.search)
+    setFilterNotice(null)
+  }
+
+  function applyPreset(preset: FilterPreset) {
+    const missingTag = preset.filters.tagId !== 'all'
+      && !availableTags.some((tag) => tag.id === preset.filters.tagId)
+    replaceFilters({ ...preset.filters, tagId: missingTag ? 'all' : preset.filters.tagId })
+    if (missingTag) setFilterNotice('The preset tag is no longer available. Showing all tags instead.')
+  }
+
+  function handleSavePreset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const name = presetName.trim()
+    if (!name) {
+      setPresetError('Enter a name for this preset.')
+      return
+    }
+    try {
+      setPresets(savePreset({
+        id: crypto.randomUUID(), name, filters: { ...activeFilters }, createdAt: getSingaporeNow().toISOString(),
+      }))
+      setAdvancedExpanded(true)
+      presetDialogRef.current?.close()
+    } catch (error) {
+      setPresetError(error instanceof Error ? error.message : 'Could not save this filter preset.')
+    }
+  }
+
+  function handleDeletePreset(preset: FilterPreset) {
+    if (!window.confirm(`Delete preset "${preset.name}"?`)) return
+    setFilterNotice(null)
+    try {
+      setPresets(deletePreset(preset.id))
+    } catch (error) {
+      setFilterNotice(error instanceof Error ? error.message : 'Could not delete this filter preset.')
+    }
+  }
+
+  const filterPreview = [
+    activeFilters.search.trim() && `Search: "${activeFilters.search.trim()}"`,
+    activeFilters.priority !== 'all' && `Priority: ${activeFilters.priority[0].toUpperCase()}${activeFilters.priority.slice(1)}`,
+    activeFilters.tagId !== 'all' && `Tag: ${availableTags.find((tag) => tag.id === activeFilters.tagId)?.name}`,
+    activeFilters.completion !== 'all' && `Completion: ${activeFilters.completion === 'completed' ? 'Completed' : 'Incomplete'}`,
+    (activeFilters.dueDateFrom || activeFilters.dueDateTo)
+      && `Date: ${activeFilters.dueDateFrom ?? 'Any'} to ${activeFilters.dueDateTo ?? 'Any'} (Singapore)`,
+  ].filter(Boolean).join(' · ')
 
   useEffect(() => {
     let active = true
@@ -97,6 +165,9 @@ export default function HomePage() {
         if (active) {
           setTodos(savedTodos)
           setAvailableTags(savedTags)
+          setPresets(loadPresets())
+          setFilters((current) => current.tagId === 'all' || savedTags.some((tag) => tag.id === current.tagId)
+            ? current : { ...current, tagId: 'all' })
           setUsername(userData.user.username)
           setLoadFailed(false)
           setPageError(null)
@@ -138,7 +209,7 @@ export default function HomePage() {
 		focusTodoIdRef.current = null
 	}, [pendingTodoIds])
 
-  const sections = sectionTodos(todos.filter((todo) => priorityFilter === 'all' || todo.priority === priorityFilter), now)
+  const sections = sectionTodos(filteredTodos, now)
   function cancelEditing() {
     setEditingTodo(null)
     setForm(emptyForm)
@@ -149,6 +220,8 @@ export default function HomePage() {
     const response = await fetch('/api/tags', { cache: 'no-store' })
     const tags = await readResponse<Tag[]>(response)
     setAvailableTags(tags)
+    setFilters((current) => current.tagId === 'all' || tags.some((tag) => tag.id === current.tagId)
+      ? current : { ...current, tagId: 'all' })
     return tags
   }
 
@@ -234,7 +307,7 @@ export default function HomePage() {
 			return
 		}
 
-		const optimisticId = -Date.now()
+		const optimisticId = -getSingaporeNow().getTime()
 		const optimistic: Todo = {
 			...payload,
 			id: optimisticId,
@@ -331,7 +404,7 @@ export default function HomePage() {
     setPageError(null)
     setSubtaskPending(pendingKey, true)
     const currentSubtasks = todo.subtasks ?? []
-    const optimisticId = -Date.now()
+    const optimisticId = -getSingaporeNow().getTime()
     const optimistic: Subtask = {
       id: optimisticId,
       todo_id: todo.id,
@@ -497,6 +570,7 @@ export default function HomePage() {
       const response = await fetch(`/api/tags/${tagId}`, { method: 'DELETE' })
       await readResponse<{ success: boolean }>(response)
       setAvailableTags((current) => current.filter((tag) => tag.id !== tagId))
+      setFilters((current) => current.tagId === tagId ? { ...current, tagId: 'all' } : current)
       setForm((current) => ({ ...current, tag_ids: current.tag_ids.filter((id) => id !== tagId) }))
       setTodos((current) => current.map((todo) => ({
         ...todo,
@@ -631,6 +705,7 @@ export default function HomePage() {
   }
 
   function renderSection(title: string, items: Todo[], className: string) {
+    if (items.length === 0) return null
     return (
       <section className={`todo-section ${className}`} aria-labelledby={`${className}-title`}>
         <div className="todo-section-heading">
@@ -882,25 +957,132 @@ export default function HomePage() {
           <h2>Your tasks</h2>
           <span>{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit' }).format(now)} SGT</span>
         </div>
-        <label className="todo-field priority-filter">
-          <span>Filter by priority</span>
-          <select aria-label="Filter by priority" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as Priority | 'all')}>
-            <option value="all">All priorities</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-        </label>
+        <section aria-label="Search and filter todos" className="filter-toolbar">
+          <div className="filter-search">
+            <label className="todo-field">
+              <span>Search todos and subtasks</span>
+              <span aria-hidden="true" className="filter-search-icon">&#128269;</span>
+              <input
+                onChange={(event) => {
+                  const search = event.target.value
+                  setFilters((current) => ({ ...current, search }))
+                  if (!search) flushSearch('')
+                }}
+                placeholder="Search todos and subtasks..."
+                type="search"
+                value={filters.search}
+              />
+            </label>
+            {filters.search && <button aria-label="Clear search" className="filter-search-clear" onClick={() => {
+              setFilters((current) => ({ ...current, search: '' }))
+              flushSearch('')
+            }} type="button">&times;</button>}
+          </div>
+          <div className="filter-quick-controls">
+            <label className="todo-field">
+              <span>Filter by priority</span>
+              <select value={filters.priority} onChange={(event) => setFilters((current) => ({
+                ...current, priority: event.target.value as FilterState['priority'],
+              }))}>
+                <option value="all">All priorities</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            {availableTags.length > 0 && <label className="todo-field">
+              <span>Filter by tag</span>
+              <select value={selectedTagId} onChange={(event) => setFilters((current) => ({
+                ...current, tagId: event.target.value === 'all' ? 'all' : Number(event.target.value),
+              }))}>
+                <option value="all">All tags</option>
+                {availableTags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
+              </select>
+            </label>}
+            <button aria-controls="advanced-filters" aria-expanded={advancedExpanded}
+              className={`quiet-button filter-advanced-toggle${advancedExpanded ? ' is-expanded' : ''}`}
+              onClick={() => setAdvancedExpanded((expanded) => !expanded)} type="button">
+              {advancedExpanded ? '\u25bc' : '\u25b6'} Advanced
+            </button>
+            {filtersActive && <div className="filter-actions">
+              <button className="quiet-button filter-clear-all" onClick={() => replaceFilters(DEFAULT_FILTER_STATE)} type="button">Clear All</button>
+              <button className="quiet-button filter-save" onClick={() => {
+                setPresetName('')
+                setPresetError(null)
+                presetDialogRef.current?.showModal()
+              }} type="button"><span aria-hidden="true">&#128190; </span>Save Filter</button>
+            </div>}
+          </div>
+          <div hidden={!advancedExpanded} id="advanced-filters">
+            <div className="filter-advanced-controls">
+              <label className="todo-field">
+                <span>Completion status</span>
+                <select value={filters.completion} onChange={(event) => setFilters((current) => ({
+                  ...current, completion: event.target.value as FilterState['completion'],
+                }))}>
+                  <option value="all">All Todos</option>
+                  <option value="incomplete">Incomplete Only</option>
+                  <option value="completed">Completed Only</option>
+                </select>
+              </label>
+              <label className="todo-field">
+                <span>Due Date From</span>
+                <input type="date" value={filters.dueDateFrom ?? ''} onChange={(event) => setFilters((current) => ({
+                  ...current, dueDateFrom: event.target.value || null,
+                }))} />
+              </label>
+              <label className="todo-field">
+                <span>Due Date To</span>
+                <input type="date" value={filters.dueDateTo ?? ''} onChange={(event) => setFilters((current) => ({
+                  ...current, dueDateTo: event.target.value || null,
+                }))} />
+              </label>
+            </div>
+            {filters.dueDateFrom && filters.dueDateTo && filters.dueDateFrom > filters.dueDateTo
+              && <p className="todo-error">From date is after To date</p>}
+            {presets.length > 0 && <div className="filter-presets" aria-label="Saved filter presets">
+              <h3>Saved Filter Presets</h3>
+              {presets.map((preset) => <span className="filter-preset" key={preset.id}>
+                <button onClick={() => applyPreset(preset)} type="button">{preset.name}</button>
+                <button aria-label={`Delete preset ${preset.name}`} onClick={() => handleDeletePreset(preset)} type="button">&times;</button>
+              </span>)}
+            </div>}
+          </div>
+          {filterNotice && <p role="status" className="workspace-note">{filterNotice}</p>}
+        </section>
         {pageError && <p className="todo-page-error" role="alert">{pageError}</p>}
         {loadFailed && <button className="quiet-button retry-load-button" onClick={retryWorkspaceLoad} type="button">Retry loading tasks</button>}
         {loading ? <p className="loading-state" role="status">Loading your tasks...</p> : !loadFailed && (
           <div className="todo-sections">
+            {todos.length === 0 ? <p className="section-empty">You have no todos yet</p>
+              : filteredTodos.length === 0 && <p className="section-empty">No todos match your filters</p>}
             {renderSection('Overdue', sections.overdue, 'overdue-section')}
             {renderSection('Pending', sections.pending, 'pending-section')}
             {renderSection('Completed', sections.completed, 'completed-section')}
           </div>
         )}
       </div>
+
+      <dialog aria-labelledby="preset-dialog-title" className="todo-edit-dialog filter-preset-dialog"
+        ref={presetDialogRef} onClose={() => setPresetError(null)}>
+        <form onSubmit={handleSavePreset}>
+          <div className="todo-dialog-heading">
+            <h2 id="preset-dialog-title">Save filter preset</h2>
+            <button aria-label="Close preset dialog" className="dialog-close"
+              onClick={() => presetDialogRef.current?.close()} type="button">&times;</button>
+          </div>
+          <p className="filter-preview">{filterPreview}</p>
+          <label className="todo-field">
+            <span>Preset name</span>
+            <input autoFocus required value={presetName} onChange={(event) => setPresetName(event.target.value)} />
+          </label>
+          {presetError && <p className="todo-error" role="alert">{presetError}</p>}
+          <div className="filter-dialog-actions">
+            <button className="quiet-button" onClick={() => presetDialogRef.current?.close()} type="button">Cancel</button>
+            <button className="primary-button" type="submit">Save</button>
+          </div>
+        </form>
+      </dialog>
 
       {editingTodo && (
         <div

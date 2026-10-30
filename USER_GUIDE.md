@@ -460,6 +460,19 @@ Categories help organize templates:
 ### What It Does
 Powerful search and filtering system to find exactly the todos you need with multi-criteria filtering and saved presets.
 
+All filtering runs locally on the tasks already loaded in your browser; typing
+does not send search requests to the server. Search waits for a 300ms pause,
+while clearing search, Clear All, and applying a preset take effect immediately.
+Tag choices use the current tag-management list, and deleting the selected tag
+resets that filter to All tags.
+
+Due-date bounds are inclusive **Singapore calendar dates**, including when the
+stored timestamp is UTC. Tasks without a due date are excluded when either
+bound is set. An inverted range shows a hint and no matches. Section counts
+reflect the filtered tasks, and sections without matches are hidden. An empty
+account shows "You have no todos yet"; an empty filtered result instead shows
+"No todos match your filters".
+
 ### Search Bar
 
 #### Location & Appearance
@@ -591,8 +604,15 @@ Current Filters:
 #### Preset Storage
 - **Location**: Browser localStorage
 - **Persistence**: Survives page refresh
-- **User-specific**: Per browser/device
-- **Format**: JSON object
+- **Scope**: Per browser and site, not per account; presets may be visible to
+  other accounts using the same browser profile. Do not include sensitive
+  information in preset names or search text on shared devices.
+- **Format**: Validated JSON array stored under `todo-app:filter-presets`
+- **Recovery**: Corrupt or invalid saved data is logged and ignored without
+  crashing the task list. Saving or deleting reports browser storage failures;
+  a failed write does not change the displayed presets.
+- **Missing tags**: Applying a preset whose tag no longer exists resets that
+  dimension to All tags and displays a notice.
 
 ### Applying Saved Presets
 
