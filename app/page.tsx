@@ -5,28 +5,30 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { AddPasskeyButton } from './AddPasskeyButton'
 import { LogoutButton } from './LogoutButton'
-import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Todo } from '@/lib/db'
+import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Tag, Todo } from '@/lib/db'
 import { calculateProgress, sectionTodos } from '@/lib/todo-utils'
 import { useNotifications } from '@/lib/hooks/useNotifications'
 import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/reminders'
 import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
 
 interface TodoForm {
-	title: string
-	due_date: string
-	priority: Priority
-	is_recurring: boolean
-	recurrence_pattern: RecurrencePattern
-	reminder_minutes: string
+  title: string
+  due_date: string
+  priority: Priority
+  is_recurring: boolean
+  recurrence_pattern: RecurrencePattern
+  reminder_minutes: string
+  tag_ids: number[]
 }
 
 const emptyForm: TodoForm = {
-	title: '',
-	due_date: '',
-	priority: 'medium',
-	is_recurring: false,
-	recurrence_pattern: 'daily',
-	reminder_minutes: '',
+  title: '',
+  due_date: '',
+  priority: 'medium',
+  is_recurring: false,
+  recurrence_pattern: 'daily',
+  reminder_minutes: '',
+  tag_ids: [],
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -38,6 +40,16 @@ async function readResponse<T>(response: Response): Promise<T> {
 		throw new Error(message)
 	}
 	return body as T
+}
+
+function getTagForegroundColor(color: string): string {
+  const channels = color.slice(1).match(/.{2}/g)?.map((channel) => Number.parseInt(channel, 16) / 255) ?? [0, 0, 0]
+  const luminance = channels
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0)
+  const blackContrast = (luminance + 0.05) / 0.05
+  const whiteContrast = 1.05 / (luminance + 0.05)
+  return blackContrast >= whiteContrast ? '#000000' : '#FFFFFF'
 }
 
 export default function HomePage() {
@@ -54,6 +66,12 @@ export default function HomePage() {
   const [pendingSubtaskKeys, setPendingSubtaskKeys] = useState<string[]>([])
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [form, setForm] = useState<TodoForm>(emptyForm)
+  const [availableTags, setAvailableTags] = useState<Tag[]>([])
+  const [tagModalOpen, setTagModalOpen] = useState(false)
+  const [tagDraftName, setTagDraftName] = useState('')
+  const [tagDraftColor, setTagDraftColor] = useState('#3B82F6')
+  const [tagDraftEditingId, setTagDraftEditingId] = useState<number | null>(null)
+  const [tagModalError, setTagModalError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const editDialogRef = useRef<HTMLElement | null>(null)
@@ -62,40 +80,44 @@ export default function HomePage() {
   const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all')
   const notifications = useNotifications(!loading && !loadFailed)
 
-	useEffect(() => {
-		let active = true
-		async function loadWorkspace() {
-			try {
-				const [todoResponse, userResponse] = await Promise.all([
-					fetch('/api/todos', { cache: 'no-store' }),
-					fetch('/api/auth/me', { cache: 'no-store' }),
-				])
-				const [savedTodos, userData] = await Promise.all([
+  useEffect(() => {
+    let active = true
+    async function loadWorkspace() {
+      try {
+        const [todoResponse, tagResponse, userResponse] = await Promise.all([
+          fetch('/api/todos', { cache: 'no-store' }),
+          fetch('/api/tags', { cache: 'no-store' }),
+          fetch('/api/auth/me', { cache: 'no-store' }),
+        ])
+        const [savedTodos, savedTags, userData] = await Promise.all([
           readResponse<Todo[]>(todoResponse),
-					readResponse<{ user: { username: string } }>(userResponse),
-				])
+          readResponse<Tag[]>(tagResponse),
+          readResponse<{ user: { username: string } }>(userResponse),
+        ])
         if (active) {
           setTodos(savedTodos)
-					setLoadFailed(false)
-					setPageError(null)
-				}
-			} catch {
-				if (active) {
-					setLoadFailed(true)
-					setPageError('Your tasks could not be loaded.')
-				}
-			} finally {
-				if (active) setLoading(false)
-			}
-		}
+          setAvailableTags(savedTags)
+          setUsername(userData.user.username)
+          setLoadFailed(false)
+          setPageError(null)
+        }
+      } catch {
+        if (active) {
+          setLoadFailed(true)
+          setPageError('Your tasks could not be loaded.')
+        }
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
 
-		void loadWorkspace()
-		const clock = window.setInterval(() => setNow(getSingaporeNow()), 30_000)
-		return () => {
-			active = false
-			window.clearInterval(clock)
-		}
-	}, [loadAttempt])
+    void loadWorkspace()
+    const clock = window.setInterval(() => setNow(getSingaporeNow()), 30_000)
+    return () => {
+      active = false
+      window.clearInterval(clock)
+    }
+  }, [loadAttempt])
 
 	useEffect(() => {
 		if (!editingTodo) {
@@ -116,68 +138,78 @@ export default function HomePage() {
 		focusTodoIdRef.current = null
 	}, [pendingTodoIds])
 
-	function startEditing(todo: Todo) {
-		setEditingTodo(todo)
-		setForm({
-			title: todo.title,
-			due_date: toSingaporeDateTimeInput(todo.due_date),
-			priority: todo.priority,
-			is_recurring: todo.is_recurring,
-			recurrence_pattern: todo.recurrence_pattern ?? 'daily',
-			reminder_minutes: todo.reminder_minutes?.toString() ?? '',
-		})
-		setFormError(null)
-	}
-
   const sections = sectionTodos(todos.filter((todo) => priorityFilter === 'all' || todo.priority === priorityFilter), now)
-	function cancelEditing() {
-		setEditingTodo(null)
-		setForm(emptyForm)
-		setFormError(null)
-	}
+  function cancelEditing() {
+    setEditingTodo(null)
+    setForm(emptyForm)
+    setFormError(null)
+  }
 
-	function buildPayload() {
-		const title = form.title.trim()
-		if (!title) throw new Error('Title is required')
+  async function refreshTags() {
+    const response = await fetch('/api/tags', { cache: 'no-store' })
+    const tags = await readResponse<Tag[]>(response)
+    setAvailableTags(tags)
+    return tags
+  }
 
-		let dueDate: string | null = null
-		if (form.due_date) {
-			const unchangedDate = editingTodo && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
-			if (unchangedDate) {
-				dueDate = editingTodo.due_date
-			} else {
-				const normalized = normalizeDueDate(form.due_date, now)
-				if (!normalized.valid) throw new Error(normalized.error)
-				dueDate = normalized.value
-			}
-		}
+  function startEditing(todo: Todo) {
+    setEditingTodo(todo)
+    setForm({
+      title: todo.title,
+      due_date: toSingaporeDateTimeInput(todo.due_date),
+      priority: todo.priority,
+      is_recurring: todo.is_recurring,
+      recurrence_pattern: todo.recurrence_pattern ?? 'daily',
+      reminder_minutes: todo.reminder_minutes?.toString() ?? '',
+      tag_ids: todo.tags?.map((tag) => tag.id) ?? [],
+    })
+    setFormError(null)
+  }
+
+  function buildPayload() {
+    const title = form.title.trim()
+    if (!title) throw new Error('Title is required')
+
+    let dueDate: string | null = null
+    if (form.due_date) {
+      const unchangedDate = editingTodo && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
+      if (unchangedDate) {
+        dueDate = editingTodo.due_date
+      } else {
+        const normalized = normalizeDueDate(form.due_date, now)
+        if (!normalized.valid) throw new Error(normalized.error)
+        dueDate = normalized.value
+      }
+    }
 
     const reminder = form.reminder_minutes ? reminderMinutesSchema.parse(Number(form.reminder_minutes)) : null
-		if (form.is_recurring && !dueDate) throw new Error('Recurring todos require a due date')
-		if (reminder !== null && !dueDate) throw new Error('Reminders require a due date')
-		return {
-			title,
-			completed: editingTodo?.completed ?? false,
-			due_date: dueDate,
-			priority: form.priority,
-			is_recurring: form.is_recurring,
-			recurrence_pattern: form.is_recurring ? form.recurrence_pattern : null,
-			reminder_minutes: reminder,
-		}
-	}
+    if (form.is_recurring && !dueDate) throw new Error('Recurring todos require a due date')
+    if (reminder !== null && !dueDate) throw new Error('Reminders require a due date')
 
-	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault()
-		if (loading || loadFailed) return
-		setFormError(null)
-		setPageError(null)
-		let payload: ReturnType<typeof buildPayload>
-		try {
-			payload = buildPayload()
-		} catch (error) {
-			setFormError(error instanceof Error ? error.message : 'Check the todo details and try again.')
-			return
-		}
+    return {
+      title,
+      completed: editingTodo?.completed ?? false,
+      due_date: dueDate,
+      priority: form.priority,
+      is_recurring: form.is_recurring,
+      recurrence_pattern: form.is_recurring ? form.recurrence_pattern : null,
+      reminder_minutes: reminder,
+      tag_ids: form.tag_ids,
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (loading || loadFailed) return
+    setFormError(null)
+    setPageError(null)
+    let payload: ReturnType<typeof buildPayload>
+    try {
+      payload = buildPayload()
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Check the todo details and try again.')
+      return
+    }
 
 		setSaving(true)
 		if (editingTodo) {
@@ -399,11 +431,93 @@ export default function HomePage() {
     }
   }
 
+  async function handleCreateTag() {
+    const trimmedName = tagDraftName.trim()
+    if (!trimmedName) {
+      setTagModalError('Tag name is required')
+      return
+    }
+    if (!/^#[0-9A-Fa-f]{6}$/.test(tagDraftColor)) {
+      setTagModalError('Color must be a valid hex code')
+      return
+    }
+
+    try {
+      const response = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmedName, color: tagDraftColor }),
+      })
+      await readResponse<Tag>(response)
+      await refreshTags()
+      setTagDraftName('')
+      setTagDraftColor('#3B82F6')
+      setTagModalError(null)
+      setTagDraftEditingId(null)
+    } catch (error) {
+      setTagModalError(error instanceof Error ? error.message : 'Could not save this tag.')
+    }
+  }
+
+  async function handleUpdateTag() {
+    if (tagDraftEditingId === null) return
+    const trimmedName = tagDraftName.trim()
+    if (!trimmedName) {
+      setTagModalError('Tag name is required')
+      return
+    }
+    if (!/^#[0-9A-Fa-f]{6}$/.test(tagDraftColor)) {
+      setTagModalError('Color must be a valid hex code')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/tags/${tagDraftEditingId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmedName, color: tagDraftColor }),
+      })
+      const parsed = await readResponse<Tag>(response)
+      setAvailableTags((current) => current.map((tag) => tag.id === parsed.id ? parsed : tag))
+      setTodos((current) => current.map((todo) => ({
+        ...todo,
+        tags: todo.tags?.map((tag) => tag.id === parsed.id ? parsed : tag),
+      })))
+      setTagDraftName('')
+      setTagDraftColor('#3B82F6')
+      setTagDraftEditingId(null)
+      setTagModalError(null)
+    } catch (error) {
+      setTagModalError(error instanceof Error ? error.message : 'Could not update this tag.')
+    }
+  }
+
+  async function handleDeleteTag(tagId: number) {
+    try {
+      const response = await fetch(`/api/tags/${tagId}`, { method: 'DELETE' })
+      await readResponse<{ success: boolean }>(response)
+      setAvailableTags((current) => current.filter((tag) => tag.id !== tagId))
+      setForm((current) => ({ ...current, tag_ids: current.tag_ids.filter((id) => id !== tagId) }))
+      setTodos((current) => current.map((todo) => ({
+        ...todo,
+        tags: todo.tags?.filter((tag) => tag.id !== tagId),
+      })))
+      if (tagDraftEditingId === tagId) {
+        setTagDraftEditingId(null)
+        setTagDraftName('')
+        setTagDraftColor('#3B82F6')
+      }
+    } catch (error) {
+      setTagModalError(error instanceof Error ? error.message : 'Could not delete this tag.')
+    }
+  }
+
   function renderTodoForm() {
     return (
       <form className="todo-create-form" onSubmit={(event) => void handleSubmit(event)}>
         <div className="todo-form-heading">
           <h2>{editingTodo ? 'Edit todo' : 'Add a todo'}</h2>
+          <button className="quiet-button" type="button" onClick={() => setTagModalOpen(true)}>Manage tags</button>
           {editingTodo && <button className="quiet-button" type="button" onClick={cancelEditing}>Cancel</button>}
         </div>
         <label className="todo-field todo-title-field">
@@ -447,6 +561,42 @@ export default function HomePage() {
               {REMINDER_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
             </select>
           </label>
+        </div>
+        <div className="tag-picker-wrap">
+          <div className="tag-picker-header">
+            <span>Tags</span>
+            <button className="quiet-button compact-button" type="button" onClick={() => setTagModalOpen(true)}>Manage tags</button>
+          </div>
+          <div className="tag-picker">
+            {availableTags.length === 0 ? (
+              <span className="tag-empty-text">No tags yet.</span>
+            ) : (
+              availableTags.map((tag) => {
+                const selected = form.tag_ids.includes(tag.id)
+                return (
+                  <button
+                    key={tag.id}
+                    className={selected ? 'tag-pill selected-tag' : 'tag-pill'}
+                    onClick={() => setForm((current) => ({
+                      ...current,
+                      tag_ids: current.tag_ids.includes(tag.id)
+                        ? current.tag_ids.filter((id) => id !== tag.id)
+                        : [...current.tag_ids, tag.id],
+                    }))}
+                    style={{
+                      backgroundColor: selected ? tag.color : undefined,
+                      borderColor: tag.color,
+                      color: selected ? getTagForegroundColor(tag.color) : undefined,
+                    }}
+                    type="button"
+                  >
+                    {selected && <span aria-hidden>✓</span>}
+                    <span>{tag.name}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>
         </div>
         <div className="todo-form-footer">
           <label className="recurring-control">
@@ -510,7 +660,15 @@ export default function HomePage() {
                     {todo.reminder_minutes !== null && <span className="reminder-badge" aria-label={`Reminder ${reminderLabel(todo.reminder_minutes)}`}>
                       &#128276; {reminderLabel(todo.reminder_minutes)}
                     </span>}
-                    {todo.tags?.map((tag) => <span className="todo-tag" key={tag.id}>{tag.name}</span>)}
+                    {todo.tags?.map((tag) => (
+                      <span
+                        className="todo-tag"
+                        key={tag.id}
+                        style={{ backgroundColor: tag.color, borderColor: tag.color, color: getTagForegroundColor(tag.color) }}
+                      >
+                        {tag.name}
+                      </span>
+                    ))}
                   </div>
                   {(() => {
                     const subtasks = todo.subtasks ?? []
@@ -609,6 +767,84 @@ export default function HomePage() {
     )
   }
 
+  function renderTagModal() {
+    if (!tagModalOpen) return null
+
+    return (
+      <div className="todo-dialog-backdrop" onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          setTagModalOpen(false)
+          setTagDraftEditingId(null)
+          setTagDraftName('')
+          setTagDraftColor('#3B82F6')
+          setTagModalError(null)
+        }
+      }}>
+        <section aria-modal="true" className="tag-modal" role="dialog">
+          <div className="todo-dialog-heading">
+            <h2>Manage tags</h2>
+            <button aria-label="Close tags dialog" className="dialog-close" onClick={() => {
+              setTagModalOpen(false)
+              setTagDraftEditingId(null)
+              setTagDraftName('')
+              setTagDraftColor('#3B82F6')
+              setTagModalError(null)
+            }} type="button">×</button>
+          </div>
+
+          <div className="tag-list">
+            {availableTags.length === 0 ? (
+              <p className="tag-empty-text">No tags yet. Add one below.</p>
+            ) : (
+              availableTags.map((tag) => (
+                <div className="tag-row" key={tag.id}>
+                  <span className="tag-pill inline-tag" style={{ backgroundColor: tag.color, color: getTagForegroundColor(tag.color), borderColor: tag.color }}>
+                    <span className="tag-label">{tag.name}</span>
+                  </span>
+                  <div className="tag-actions">
+                    <button type="button" onClick={() => {
+                      setTagDraftEditingId(tag.id)
+                      setTagDraftName(tag.name)
+                      setTagDraftColor(tag.color)
+                      setTagModalError(null)
+                    }}>Edit</button>
+                    <button className="delete-action" type="button" onClick={() => void handleDeleteTag(tag.id)}>Delete</button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="tag-form">
+            <input
+              onChange={(event) => setTagDraftName(event.target.value)}
+              placeholder="Tag name"
+              type="text"
+              value={tagDraftName}
+            />
+            <input
+              onChange={(event) => setTagDraftColor(event.target.value)}
+              type="color"
+              value={tagDraftColor}
+            />
+            <button className="primary-button" onClick={() => void (tagDraftEditingId === null ? handleCreateTag() : handleUpdateTag())} type="button">
+              {tagDraftEditingId === null ? 'Create tag' : 'Update tag'}
+            </button>
+          </div>
+          {tagDraftEditingId !== null && (
+            <button className="quiet-button full-width-button" onClick={() => {
+              setTagDraftEditingId(null)
+              setTagDraftName('')
+              setTagDraftColor('#3B82F6')
+              setTagModalError(null)
+            }} type="button">Cancel edit</button>
+          )}
+          {tagModalError && <p className="todo-error" role="alert">{tagModalError}</p>}
+        </section>
+      </div>
+    )
+  }
+
   return (
     <main className="workspace-shell">
       <header className="workspace-header">
@@ -688,6 +924,7 @@ export default function HomePage() {
           </section>
         </div>
       )}
+      {renderTagModal()}
     </main>
   )
 }

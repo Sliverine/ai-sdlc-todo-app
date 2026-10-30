@@ -102,6 +102,16 @@ export interface Tag {
   created_at: string
 }
 
+export interface CreateTagInput {
+  name: string
+  color?: string
+}
+
+export interface UpdateTagInput {
+  name?: string
+  color?: string
+}
+
 export interface Template {
   id: number
   user_id: number
@@ -549,6 +559,105 @@ export function createSubtaskDB(database: Database.Database) {
 export const db = createDatabase(process.env.DATABASE_PATH ?? join(process.cwd(), 'todos.db'))
 export const todoDB = createTodoDB(db)
 export const subtaskDB = createSubtaskDB(db)
+
+export function createTagDB(database: Database.Database) {
+  function normalizeName(value: string | undefined): string {
+    const trimmed = value?.trim() ?? ''
+    if (!trimmed) throw new Error('Tag name is required')
+    return trimmed
+  }
+
+  function normalizeColor(value: string | undefined, fallback = '#3B82F6'): string {
+    const resolved = value ?? fallback
+    if (!/^#[0-9A-Fa-f]{6}$/.test(resolved)) {
+      throw new Error('Color must be a valid hex code')
+    }
+    return resolved
+  }
+
+  return {
+    findAllByUser(userId: number): Tag[] {
+      return database.prepare('SELECT * FROM tags WHERE user_id = ? ORDER BY name COLLATE NOCASE').all(userId) as Tag[]
+    },
+
+    findById(id: number, userId: number): Tag | null {
+      const row = database.prepare('SELECT * FROM tags WHERE id = ? AND user_id = ?').get(id, userId) as Tag | undefined
+      return row ?? null
+    },
+
+    create(userId: number, input: CreateTagInput): Tag {
+      const name = normalizeName(input.name)
+      const color = normalizeColor(input.color, '#3B82F6')
+      try {
+        const result = database.prepare('INSERT INTO tags (user_id, name, color, created_at) VALUES (?, ?, ?, ?)')
+          .run(userId, name, color, getSingaporeNow().toISOString())
+        const created = database.prepare('SELECT * FROM tags WHERE id = ?').get(Number(result.lastInsertRowid)) as Tag | undefined
+        if (!created) throw new Error('Unable to create tag')
+        return created
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('UNIQUE') || message.includes('already exists')) {
+          throw new Error('A tag with this name already exists')
+        }
+        throw error
+      }
+    },
+
+    update(id: number, userId: number, input: UpdateTagInput): Tag | null {
+      const existing = this.findById(id, userId)
+      if (!existing) return null
+
+      const name = input.name === undefined ? existing.name : normalizeName(input.name)
+      const color = input.color === undefined ? existing.color : normalizeColor(input.color)
+
+      try {
+        database.prepare('UPDATE tags SET name = ?, color = ? WHERE id = ? AND user_id = ?').run(name, color, id, userId)
+        return this.findById(id, userId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('UNIQUE') || message.includes('already exists')) {
+          throw new Error('A tag with this name already exists')
+        }
+        throw error
+      }
+    },
+
+    delete(id: number, userId: number): boolean {
+      const result = database.prepare('DELETE FROM tags WHERE id = ? AND user_id = ?').run(id, userId)
+      return result.changes === 1
+    },
+
+    attachToTodo(todoId: number, tagId: number, userId: number): boolean {
+      const todo = database.prepare('SELECT id FROM todos WHERE id = ? AND user_id = ?').get(todoId, userId)
+      const tag = database.prepare('SELECT id FROM tags WHERE id = ? AND user_id = ?').get(tagId, userId)
+      if (!todo || !tag) return false
+
+      database.prepare('INSERT OR IGNORE INTO todo_tags (todo_id, tag_id) VALUES (?, ?)').run(todoId, tagId)
+      return true
+    },
+
+    detachFromTodo(todoId: number, tagId: number, userId: number): boolean {
+      const todo = database.prepare('SELECT id FROM todos WHERE id = ? AND user_id = ?').get(todoId, userId)
+      const tag = database.prepare('SELECT id FROM tags WHERE id = ? AND user_id = ?').get(tagId, userId)
+      if (!todo || !tag) return false
+
+      database.prepare('DELETE FROM todo_tags WHERE todo_id = ? AND tag_id = ?').run(todoId, tagId)
+      return true
+    },
+
+    findByTodoId(todoId: number): Tag[] {
+      return database.prepare(`
+        SELECT tags.*
+        FROM tags
+        INNER JOIN todo_tags ON todo_tags.tag_id = tags.id
+        WHERE todo_tags.todo_id = ?
+        ORDER BY tags.name COLLATE NOCASE
+      `).all(todoId) as Tag[]
+    },
+  }
+}
+
+export const tagDB = createTagDB(db)
 
 export function createAuthDataDB(database: Database.Database) {
   const users = {
