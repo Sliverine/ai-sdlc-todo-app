@@ -64,8 +64,11 @@ export async function POST(request: NextRequest) {
 
 	const dueDate = normalizeDueDate(input.due_date)
 	if (!dueDate.valid) return NextResponse.json({ error: dueDate.error }, { status: 400 })
-	if (input.is_recurring && (!dueDate.value || !input.recurrence_pattern)) {
-		return NextResponse.json({ error: 'Recurring todos require a due date and pattern' }, { status: 400 })
+	if (input.is_recurring && !dueDate.value) {
+		return NextResponse.json({ error: 'Recurring todos require a due date' }, { status: 400 })
+	}
+	if (input.is_recurring && !input.recurrence_pattern) {
+		return NextResponse.json({ error: 'Invalid recurrence pattern' }, { status: 400 })
 	}
 	if (input.reminder_minutes != null && !dueDate.value) {
 		return NextResponse.json({ error: 'Reminders require a due date' }, { status: 400 })

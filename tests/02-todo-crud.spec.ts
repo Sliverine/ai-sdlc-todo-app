@@ -83,7 +83,7 @@ test('creates a future-dated todo with priority, recurrence, and reminder metada
 
   const todoRow = page.locator('.todo-row').filter({ hasText: 'Submit the project report' })
   await expect(todoRow).toContainText('high')
-  await expect(todoRow).toContainText('Repeats weekly')
+  await expect(todoRow.getByLabel('Repeats weekly')).toContainText('🔄 weekly')
   await expect(todoRow).toContainText('Reminder set')
   await cdp.detach()
 })

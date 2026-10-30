@@ -141,6 +141,59 @@ describe('todo database operations', () => {
     })
   })
 
+  it('creates one next occurrence with current metadata and tags when a recurring todo is completed', () => {
+    const { database, todoDB } = createStore()
+    const userId = createTodoUser(database, 'alice')
+    const tagId = Number(database.prepare(
+      'INSERT INTO tags (user_id, name) VALUES (?, ?)',
+    ).run(userId, 'Habits').lastInsertRowid)
+    const todo = todoDB.create({
+      user_id: userId,
+      title: 'Weekly review',
+      due_date: '2026-12-01T10:00:00.000Z',
+      priority: 'high',
+      is_recurring: true,
+      recurrence_pattern: 'weekly',
+      reminder_minutes: 30,
+      tag_ids: [tagId],
+    })
+
+    todoDB.update(todo.id, userId, { completed: true })
+    todoDB.update(todo.id, userId, { completed: true })
+
+    const instances = todoDB.findAllByUser(userId).filter((instance) => instance.title === todo.title)
+    expect(instances).toHaveLength(2)
+    expect(instances.find((instance) => instance.id === todo.id)).toMatchObject({ completed: true })
+    expect(instances.find((instance) => instance.id !== todo.id)).toMatchObject({
+      completed: false,
+      due_date: '2026-12-08T10:00:00.000Z',
+      priority: 'high',
+      is_recurring: true,
+      recurrence_pattern: 'weekly',
+      reminder_minutes: 30,
+      tags: [{ id: tagId, name: 'Habits' }],
+    })
+  })
+
+  it('does not create another occurrence for non-recurring todos or when deleting an uncompleted recurring todo', () => {
+    const { database, todoDB } = createStore()
+    const userId = createTodoUser(database, 'alice')
+    const regular = todoDB.create({ user_id: userId, title: 'One-off' })
+    todoDB.update(regular.id, userId, { completed: true })
+
+    const recurring = todoDB.create({
+      user_id: userId,
+      title: 'Stop before completion',
+      due_date: '2026-12-01T10:00:00.000Z',
+      is_recurring: true,
+      recurrence_pattern: 'daily',
+    })
+    expect(todoDB.delete(recurring.id, userId)).toBe(true)
+
+    expect(todoDB.findAllByUser(userId).map((todo) => todo.title)).toEqual(['One-off'])
+    expect(todoDB.findById(regular.id, userId)?.completed).toBe(true)
+  })
+
   it('returns subtasks and tags with a todo and cascades dependent rows on delete', () => {
     const { database, todoDB } = createStore()
     const userId = createTodoUser(database, 'alice')

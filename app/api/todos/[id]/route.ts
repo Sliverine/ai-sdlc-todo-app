@@ -94,8 +94,11 @@ export async function PUT(
 	const nextRecurring = input.is_recurring ?? existing.is_recurring
 	const nextPattern = input.recurrence_pattern === undefined ? existing.recurrence_pattern : input.recurrence_pattern
 	const nextReminder = input.reminder_minutes === undefined ? existing.reminder_minutes : input.reminder_minutes
-	if (nextRecurring && (!nextDueDate || !nextPattern)) {
-		return NextResponse.json({ error: 'Recurring todos require a due date and pattern' }, { status: 400 })
+	if (nextRecurring && !nextDueDate) {
+		return NextResponse.json({ error: 'Recurring todos require a due date' }, { status: 400 })
+	}
+	if (nextRecurring && !nextPattern) {
+		return NextResponse.json({ error: 'Invalid recurrence pattern' }, { status: 400 })
 	}
 	if (nextReminder != null && !nextDueDate) {
 		return NextResponse.json({ error: 'Reminders require a due date' }, { status: 400 })

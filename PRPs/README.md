@@ -207,3 +207,4 @@ When adding new PRPs:
 **Last Updated**: November 11, 2025
 **Total PRPs**: 11
 **Total Features Documented**: 10 core application features + 1 infrastructure feature
+**Team Members**: Michael Ang Yi Shien, Desmond Peh Han Yong, Chua Ting Xuan, Lee Sheng Shaw, Rekhayadav, Andy Yeo Chia Guan
