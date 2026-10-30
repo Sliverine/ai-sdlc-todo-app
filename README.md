@@ -2,6 +2,45 @@
 
 This walkthrough will guide you from zero to running the Todo App with GitHub Copilot assistance.
 
+## Current Implementation: Reminders and Prerequisites
+
+The application now includes the foundation needed for [PRP 04](PRPs/04-reminders-notifications.md): passkey registration/login, SQLite persistence, todo CRUD, priority, recurrence, reminder selection, and browser notification polling. Later features described in this guide (subtasks UI, tag management, templates, search presets, import/export, and calendar) are not implemented by this feature increment.
+
+### Run locally
+
+Use Node.js 24 LTS and npm. From the repository root:
+
+```powershell
+npm install
+Copy-Item .env.example .env.local
+```
+
+Set `JWT_SECRET` in `.env.local` to a cryptographically random value of at least 32 characters. Generate a value locally with `node -e "console.info(require('node:crypto').randomBytes(48).toString('base64url'))"`; never commit it. The example uses `http://localhost:3000`, RP ID `localhost`, and `todos.db`. Production requires the actual HTTPS `APP_ORIGIN`, matching domain-only `RP_ID`, and a persistent writable `DATABASE_PATH`.
+
+```powershell
+npm run dev
+```
+
+Open `http://localhost:3000/login` and register with a passkey. Browser notifications require an open app tab and granted site permission. The app checks every 30 seconds; returning to the app also delivers unacknowledged overdue reminders. There is no email, push service, or closed-browser delivery. Delivery across simultaneous tabs is best-effort, not exactly-once.
+
+The initial deployment must use a single Node.js instance: authentication challenge replay tracking and rate limits are process-local. Horizontal scaling requires shared challenge/rate-limit storage. Lost-passkey recovery is not implemented; add another passkey from Passkey settings while you still have access.
+
+### Verify this increment
+
+```powershell
+npm test
+npm run test:coverage
+npm run typecheck
+npm run lint
+npm run build
+npx playwright install chromium
+npm run test:e2e -- tests\06-reminders.spec.ts
+```
+
+The E2E runner starts its own server on port 3100, creates a random session secret, uses `.e2e-todos.db` rather than the development database, and registers real virtual passkeys through Chromium DevTools Protocol. Do not run that suite concurrently against the same E2E database. Coverage thresholds apply to the reminder hook and client reminder contract; backend behavior is additionally checked by database/API tests. Test OS notification rendering manually: enable notifications, create a todo due in two minutes with a 15-minute reminder, and confirm one immediate notification and no repeat on the next poll.
+
+Validation status for this increment: production build and TypeScript checks passed. Test files were started before the request to omit test cases and reviews; the complete client/E2E suites and a full coverage run were not executed. The commands above describe available checks, not a claim that those suites passed.
+
 Reference : https://ai-sdlc-workshop-day1-production.up.railway.app/login
 
 ---

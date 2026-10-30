@@ -202,11 +202,13 @@ Todos with reminders show a **🔔 badge** with abbreviated time:
 - `🔔 1w` - 1 week
 
 ### How It Works
-- System checks every minute for pending reminders
-- Notification sent when reminder time arrives
-- Each reminder only sent once (tracked via `last_notification_sent`)
-- Notifications persist until acknowledged
-- Works even if browser tab is in background
+- The app checks every 30 seconds while a tab is open and notification permission is granted; browsers may throttle background tabs.
+- Notifications become eligible when the reminder window opens. Unacknowledged overdue reminders are also delivered when you return to the app.
+- After displaying a notification, the client acknowledges it to the server through the todo update API (`last_notification_sent`). Failed acknowledgements are retried without redisplaying that schedule in the same mounted tab.
+- Changing the due date or reminder timing re-arms the reminder. Removing the due date clears the reminder selection.
+- Multiple tabs can race before acknowledgement; a shared notification tag helps the OS coalesce duplicates, but exactly-once delivery across tabs is not guaranteed.
+- Browser notifications do not run when the app is closed, and OS/browser settings control how long a notification remains visible.
+- If permission is blocked, allow notifications in your browser's site settings and reload. Unsupported browsers show an explanatory message.
 
 ---
 
