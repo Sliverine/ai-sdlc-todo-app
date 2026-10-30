@@ -1,4 +1,4 @@
-import type { Priority, Todo } from './db'
+import type { Priority, Subtask, Todo } from './db'
 
 const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 }
 
@@ -44,4 +44,10 @@ export function sectionTodos(todos: Todo[], now: Date): TodoSections {
     pending: sortTodos(pending),
     completed,
   }
+}
+
+export function calculateProgress(subtasks: Subtask[]): { completed: number; total: number; percent: number } {
+  const total = subtasks.length
+  const completed = subtasks.filter((subtask) => subtask.completed).length
+  return { completed, total, percent: total === 0 ? 0 : Math.round((completed / total) * 100) }
 }

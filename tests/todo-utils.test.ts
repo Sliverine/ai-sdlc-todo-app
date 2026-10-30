@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Todo } from '../lib/db'
-import { sectionTodos, sortTodos } from '../lib/todo-utils'
+import { calculateProgress, sectionTodos, sortTodos } from '../lib/todo-utils'
 import { formatSingaporeDate, normalizeDueDate, parseDueDate, toSingaporeDateTimeInput } from '../lib/timezone'
 
 const now = new Date('2026-10-30T00:00:00.000Z')
@@ -115,5 +115,28 @@ describe('todo sorting and sections', () => {
     ], now)
 
     expect(sections.completed.map(({ id }) => id)).toEqual([2, 1])
+  })
+})
+
+describe('subtask progress', () => {
+  it('calculates empty, incomplete, partial, and complete progress with rounding', () => {
+    expect(calculateProgress([])).toEqual({ completed: 0, total: 0, percent: 0 })
+    expect(calculateProgress([
+      { id: 1, todo_id: 1, title: 'First', completed: false, position: 0, created_at: '' },
+      { id: 2, todo_id: 1, title: 'Second', completed: false, position: 1, created_at: '' },
+    ])).toEqual({ completed: 0, total: 2, percent: 0 })
+    expect(calculateProgress([
+      { id: 1, todo_id: 1, title: 'First', completed: true, position: 0, created_at: '' },
+      { id: 2, todo_id: 1, title: 'Second', completed: false, position: 1, created_at: '' },
+      { id: 3, todo_id: 1, title: 'Third', completed: false, position: 2, created_at: '' },
+    ])).toEqual({ completed: 1, total: 3, percent: 33 })
+    expect(calculateProgress([
+      { id: 1, todo_id: 1, title: 'First', completed: true, position: 0, created_at: '' },
+      { id: 2, todo_id: 1, title: 'Second', completed: true, position: 1, created_at: '' },
+      { id: 3, todo_id: 1, title: 'Third', completed: false, position: 2, created_at: '' },
+    ])).toEqual({ completed: 2, total: 3, percent: 67 })
+    expect(calculateProgress([
+      { id: 1, todo_id: 1, title: 'First', completed: true, position: 0, created_at: '' },
+    ])).toEqual({ completed: 1, total: 1, percent: 100 })
   })
 })

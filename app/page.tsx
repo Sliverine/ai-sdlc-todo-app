@@ -5,8 +5,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { AddPasskeyButton } from './AddPasskeyButton'
 import { LogoutButton } from './LogoutButton'
-import type { Priority, RecurrencePattern, Todo } from '@/lib/db'
-import { sectionTodos } from '@/lib/todo-utils'
+import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Todo } from '@/lib/db'
+import { calculateProgress, sectionTodos } from '@/lib/todo-utils'
 import { useNotifications } from '@/lib/hooks/useNotifications'
 import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/reminders'
 import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
@@ -49,6 +49,9 @@ export default function HomePage() {
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [saving, setSaving] = useState(false)
   const [pendingTodoIds, setPendingTodoIds] = useState<number[]>([])
+  const [expandedSubtaskTodoIds, setExpandedSubtaskTodoIds] = useState<number[]>([])
+  const [subtaskDrafts, setSubtaskDrafts] = useState<Record<number, string>>({})
+  const [pendingSubtaskKeys, setPendingSubtaskKeys] = useState<string[]>([])
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [form, setForm] = useState<TodoForm>(emptyForm)
   const [formError, setFormError] = useState<string | null>(null)
@@ -277,6 +280,101 @@ export default function HomePage() {
     }
   }
 
+  function replaceSubtaskInTodo(todoId: number, subtaskId: number, replacement: Subtask | null) {
+    setTodos((current) => current.map((todo) => {
+      if (todo.id !== todoId) return todo
+      const remaining = (todo.subtasks ?? []).filter((subtask) => subtask.id !== subtaskId)
+      const subtasks = replacement
+        ? [...remaining, replacement].sort((first, second) => first.position - second.position || first.id - second.id)
+        : remaining
+      return { ...todo, subtasks }
+    }))
+  }
+
+  function setSubtaskPending(key: string, pending: boolean) {
+    setPendingSubtaskKeys((current) => pending
+      ? [...current, key]
+      : current.filter((entry) => entry !== key))
+  }
+
+  async function addSubtask(todo: Todo) {
+    const title = (subtaskDrafts[todo.id] ?? '').trim()
+    const pendingKey = `todo:${todo.id}`
+    if (!title || pendingSubtaskKeys.includes(pendingKey)) return
+
+    setPageError(null)
+    setSubtaskPending(pendingKey, true)
+    const currentSubtasks = todo.subtasks ?? []
+    const optimisticId = -Date.now()
+    const optimistic: Subtask = {
+      id: optimisticId,
+      todo_id: todo.id,
+      title,
+      completed: false,
+      position: Math.max(-1, ...currentSubtasks.map((subtask) => subtask.position)) + 1,
+      created_at: getSingaporeNow().toISOString(),
+    }
+    replaceSubtaskInTodo(todo.id, optimisticId, optimistic)
+    setSubtaskDrafts((current) => ({ ...current, [todo.id]: '' }))
+
+    try {
+      const response = await fetch(`/api/todos/${todo.id}/subtasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      const saved = await readResponse<Subtask>(response)
+      replaceSubtaskInTodo(todo.id, optimisticId, saved)
+    } catch (error) {
+      replaceSubtaskInTodo(todo.id, optimisticId, null)
+      setSubtaskDrafts((current) => ({ ...current, [todo.id]: title }))
+      setPageError(error instanceof Error ? error.message : 'Could not add this subtask. Please try again.')
+    } finally {
+      setSubtaskPending(pendingKey, false)
+    }
+  }
+
+  async function toggleSubtask(todoId: number, subtask: Subtask) {
+    const pendingKey = `subtask:${subtask.id}`
+    if (pendingSubtaskKeys.includes(pendingKey)) return
+
+    setPageError(null)
+    setSubtaskPending(pendingKey, true)
+    const optimistic = { ...subtask, completed: !subtask.completed }
+    replaceSubtaskInTodo(todoId, subtask.id, optimistic)
+    try {
+      const response = await fetch(`/api/subtasks/${subtask.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed: optimistic.completed }),
+      })
+      replaceSubtaskInTodo(todoId, subtask.id, await readResponse<Subtask>(response))
+    } catch {
+      replaceSubtaskInTodo(todoId, subtask.id, subtask)
+      setPageError('Could not update this subtask. Please try again.')
+    } finally {
+      setSubtaskPending(pendingKey, false)
+    }
+  }
+
+  async function removeSubtask(todoId: number, subtask: Subtask) {
+    const pendingKey = `subtask:${subtask.id}`
+    if (pendingSubtaskKeys.includes(pendingKey)) return
+
+    setPageError(null)
+    setSubtaskPending(pendingKey, true)
+    replaceSubtaskInTodo(todoId, subtask.id, null)
+    try {
+      const response = await fetch(`/api/subtasks/${subtask.id}`, { method: 'DELETE' })
+      await readResponse<{ success: boolean }>(response)
+    } catch {
+      replaceSubtaskInTodo(todoId, subtask.id, subtask)
+      setPageError('Could not delete this subtask. Please try again.')
+    } finally {
+      setSubtaskPending(pendingKey, false)
+    }
+  }
+
   function retryWorkspaceLoad() {
     setLoadFailed(false)
     setLoading(true)
@@ -418,11 +516,90 @@ export default function HomePage() {
                     </span>}
                     {todo.tags?.map((tag) => <span className="todo-tag" key={tag.id}>{tag.name}</span>)}
                   </div>
-                  {todo.subtasks && todo.subtasks.length > 0 && (
-                    <p className="todo-subtask-count">
-                      {todo.subtasks.filter((subtask) => subtask.completed).length}/{todo.subtasks.length} subtasks
-                    </p>
-                  )}
+                  {(() => {
+                    const subtasks = todo.subtasks ?? []
+                    const progress = calculateProgress(subtasks)
+                    const expanded = expandedSubtaskTodoIds.includes(todo.id)
+                    const addPending = pendingSubtaskKeys.includes(`todo:${todo.id}`)
+                    return (
+                      <div className="todo-subtasks">
+                        <button
+                          aria-controls={`subtasks-${todo.id}`}
+                          aria-expanded={expanded}
+                          className="subtask-toggle"
+                          onClick={() => setExpandedSubtaskTodoIds((current) => expanded
+                            ? current.filter((id) => id !== todo.id)
+                            : [...current, todo.id])}
+                          type="button"
+                        >
+                          {expanded ? 'Hide' : 'Show'} subtasks
+                        </button>
+                        {progress.total > 0 && (
+                          <div className="subtask-progress">
+                            <div className="subtask-progress-label">
+                              <span>{progress.completed}/{progress.total} subtasks</span>
+                              <span>{progress.percent}%</span>
+                            </div>
+                            <div
+                              aria-label="Subtask completion"
+                              aria-valuemax={100}
+                              aria-valuemin={0}
+                              aria-valuenow={progress.percent}
+                              aria-valuetext={`${progress.completed} of ${progress.total} subtasks complete`}
+                              className={`subtask-progress-track${progress.percent === 100 ? ' complete' : ''}`}
+                              role="progressbar"
+                            >
+                              <div className="subtask-progress-fill" style={{ width: `${progress.percent}%` }} />
+                            </div>
+                          </div>
+                        )}
+                        <div className="subtask-panel" hidden={!expanded} id={`subtasks-${todo.id}`}>
+                          <ul className="subtask-list">
+                            {subtasks.map((subtask) => {
+                              const subtaskPending = pendingSubtaskKeys.includes(`subtask:${subtask.id}`)
+                              return (
+                                <li className="subtask-row" key={subtask.id}>
+                                  <input
+                                    aria-label={`Mark subtask ${subtask.title} ${subtask.completed ? 'incomplete' : 'complete'}`}
+                                    checked={subtask.completed}
+                                    disabled={subtaskPending}
+                                    onChange={() => void toggleSubtask(todo.id, subtask)}
+                                    type="checkbox"
+                                  />
+                                  <span className={subtask.completed ? 'subtask-title is-complete' : 'subtask-title'}>{subtask.title}</span>
+                                  <button
+                                    aria-label={`Delete subtask ${subtask.title}`}
+                                    className="subtask-delete-button"
+                                    disabled={subtaskPending}
+                                    onClick={() => void removeSubtask(todo.id, subtask)}
+                                    type="button"
+                                  >
+                                    Delete
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                          <form
+                            className="subtask-add-form"
+                            onSubmit={(event) => { event.preventDefault(); void addSubtask(todo) }}
+                          >
+                            <input
+                              aria-label={`Subtask title for ${todo.title}`}
+                              autoComplete="off"
+                              disabled={addPending}
+                              onChange={(event) => setSubtaskDrafts((current) => ({ ...current, [todo.id]: event.target.value }))}
+                              placeholder="Add a subtask"
+                              value={subtaskDrafts[todo.id] ?? ''}
+                            />
+                            <button disabled={addPending || !(subtaskDrafts[todo.id] ?? '').trim()} type="submit">
+                              Add subtask
+                            </button>
+                          </form>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
                 <div className="todo-actions">
                   <button disabled={pendingTodoIds.includes(todo.id)} type="button" onClick={() => startEditing(todo)}>Edit</button>

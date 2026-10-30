@@ -83,6 +83,15 @@ export interface Subtask {
   created_at: string
 }
 
+export interface CreateSubtaskDto {
+  title: string
+}
+
+export interface UpdateSubtaskDto {
+  title?: string
+  completed?: boolean
+}
+
 export interface Tag {
   id: number
   user_id: number
@@ -468,8 +477,76 @@ export function createTodoDB(database: Database.Database) {
   }
 }
 
+export function createSubtaskDB(database: Database.Database) {
+  function findById(id: number, userId: number): Subtask | null {
+    const row = database.prepare(`
+      SELECT subtasks.id, subtasks.todo_id, subtasks.title, subtasks.completed,
+        subtasks.position, subtasks.created_at
+      FROM subtasks INNER JOIN todos ON todos.id = subtasks.todo_id
+      WHERE subtasks.id = ? AND todos.user_id = ?
+    `).get(id, userId) as SubtaskRow | undefined
+    return row ? { ...row, completed: Boolean(row.completed) } : null
+  }
+
+  return {
+    findByTodoId(todoId: number, userId: number): Subtask[] {
+      const rows = database.prepare(`
+        SELECT subtasks.id, subtasks.todo_id, subtasks.title, subtasks.completed,
+          subtasks.position, subtasks.created_at
+        FROM subtasks INNER JOIN todos ON todos.id = subtasks.todo_id
+        WHERE subtasks.todo_id = ? AND todos.user_id = ?
+        ORDER BY subtasks.position, subtasks.id
+      `).all(todoId, userId) as SubtaskRow[]
+      return rows.map((row) => ({ ...row, completed: Boolean(row.completed) }))
+    },
+
+    create(todoId: number, userId: number, input: CreateSubtaskDto): Subtask | null {
+      const result = database.prepare(`
+        INSERT INTO subtasks (todo_id, title, position, created_at)
+        SELECT todos.id, ?,
+          (SELECT COALESCE(MAX(position) + 1, 0) FROM subtasks WHERE todo_id = todos.id),
+          ?
+        FROM todos WHERE todos.id = ? AND todos.user_id = ?
+      `).run(input.title, getSingaporeNow().toISOString(), todoId, userId)
+      return result.changes === 1 ? findById(Number(result.lastInsertRowid), userId) : null
+    },
+
+    update(id: number, userId: number, input: UpdateSubtaskDto): Subtask | null {
+      const assignments: string[] = []
+      const values: unknown[] = []
+      if (input.title !== undefined) {
+        assignments.push('title = ?')
+        values.push(input.title)
+      }
+      if (input.completed !== undefined) {
+        assignments.push('completed = ?')
+        values.push(input.completed ? 1 : 0)
+      }
+      if (assignments.length === 0) return findById(id, userId)
+
+      const result = database.prepare(`
+        UPDATE subtasks SET ${assignments.join(', ')}
+        WHERE id = ? AND EXISTS (
+          SELECT 1 FROM todos WHERE todos.id = subtasks.todo_id AND todos.user_id = ?
+        )
+      `).run(...values, id, userId)
+      return result.changes === 1 ? findById(id, userId) : null
+    },
+
+    delete(id: number, userId: number): boolean {
+      const result = database.prepare(`
+        DELETE FROM subtasks WHERE id = ? AND EXISTS (
+          SELECT 1 FROM todos WHERE todos.id = subtasks.todo_id AND todos.user_id = ?
+        )
+      `).run(id, userId)
+      return result.changes === 1
+    },
+  }
+}
+
 export const db = createDatabase(process.env.DATABASE_PATH ?? join(process.cwd(), 'todos.db'))
 export const todoDB = createTodoDB(db)
+export const subtaskDB = createSubtaskDB(db)
 
 export function createAuthDataDB(database: Database.Database) {
   const users = {

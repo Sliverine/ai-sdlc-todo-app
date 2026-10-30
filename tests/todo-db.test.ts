@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createDatabase, createTodoDB } from '../lib/db'
+import { createDatabase, createSubtaskDB, createTodoDB } from '../lib/db'
 
 describe('todo database operations', () => {
   const directories: string[] = []
@@ -27,7 +27,11 @@ describe('todo database operations', () => {
     directories.push(directory)
     const database = createDatabase(join(directory, 'test.db'))
     databases.push(database)
-    return { database, todoDB: createTodoDB(database) }
+    return {
+      database,
+      subtaskDB: createSubtaskDB(database),
+      todoDB: createTodoDB(database),
+    }
   }
 
   it('creates todos with defaults and lists only the requested user’s todos', () => {
@@ -154,6 +158,30 @@ describe('todo database operations', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM subtasks WHERE todo_id = ?').get(todo.id)).toEqual({ count: 0 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM todo_tags WHERE todo_id = ?').get(todo.id)).toEqual({ count: 0 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM tags WHERE id = ?').get(tagId)).toEqual({ count: 1 })
+  })
+
+  it('orders subtasks, appends positions, scopes mutations, and leaves position gaps on delete', () => {
+    const { database, subtaskDB, todoDB } = createStore()
+    const ownerId = createTodoUser(database, 'owner')
+    const otherId = createTodoUser(database, 'other')
+    const todo = todoDB.create({ user_id: ownerId, title: 'Owned task' })
+    const otherTodo = todoDB.create({ user_id: otherId, title: 'Other task' })
+    const first = subtaskDB.create(todo.id, ownerId, { title: 'First' })!
+    const second = subtaskDB.create(todo.id, ownerId, { title: 'Second' })!
+    const otherSubtask = subtaskDB.create(otherTodo.id, otherId, { title: 'Private' })!
+
+    expect([first.position, second.position, otherSubtask.position]).toEqual([0, 1, 0])
+    expect(subtaskDB.findByTodoId(todo.id, ownerId).map(({ id }) => id)).toEqual([first.id, second.id])
+    expect(subtaskDB.findByTodoId(todo.id, otherId)).toEqual([])
+    expect(subtaskDB.update(first.id, otherId, { completed: true })).toBeNull()
+    expect(subtaskDB.delete(first.id, otherId)).toBe(false)
+    expect(subtaskDB.update(first.id, ownerId, { title: 'Renamed', completed: true })).toMatchObject({
+      title: 'Renamed', completed: true, position: 0,
+    })
+    expect(subtaskDB.delete(first.id, ownerId)).toBe(true)
+    expect(subtaskDB.findByTodoId(todo.id, ownerId)).toMatchObject([{ id: second.id, position: 1 }])
+    expect(subtaskDB.create(todo.id, ownerId, { title: 'Third' })?.position).toBe(2)
+    expect(subtaskDB.create(todo.id, otherId, { title: 'Not allowed' })).toBeNull()
   })
 
   it('normalizes todo timestamps when opening a legacy SQLite database', () => {
