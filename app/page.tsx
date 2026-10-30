@@ -331,6 +331,7 @@ export default function HomePage() {
                 ...current,
                 due_date: event.target.value,
                 reminder_minutes: event.target.value ? current.reminder_minutes : '',
+                is_recurring: event.target.value ? current.is_recurring : false,
               }))}
               type="datetime-local"
               value={form.due_date}
@@ -360,11 +361,13 @@ export default function HomePage() {
           <label className="recurring-control">
             <input
               checked={form.is_recurring}
+              disabled={!form.due_date}
               onChange={(event) => setForm((current) => ({ ...current, is_recurring: event.target.checked }))}
               type="checkbox"
             />
             <span>Repeat this todo</span>
           </label>
+          {!form.due_date && <span className="recurrence-hint">Set a due date to enable repeat</span>}
           {form.is_recurring && (
             <label className="todo-field recurrence-select">
               <span>Repeat</span>
@@ -412,7 +415,9 @@ export default function HomePage() {
                   <div className="todo-metadata">
                     <span className={`priority-label priority-${todo.priority}`}>{todo.priority}</span>
                     {todo.due_date && <span>{formatSingaporeDate(todo.due_date)}</span>}
-                    {todo.is_recurring && todo.recurrence_pattern && <span>Repeats {todo.recurrence_pattern}</span>}
+                    {todo.is_recurring && todo.recurrence_pattern && <span className="recurrence-badge" aria-label={`Repeats ${todo.recurrence_pattern}`}>
+                      &#128260; {todo.recurrence_pattern}
+                    </span>}
                     {todo.reminder_minutes !== null && <span className="reminder-badge" aria-label={`Reminder ${reminderLabel(todo.reminder_minutes)}`}>
                       &#128276; {reminderLabel(todo.reminder_minutes)}
                     </span>}
