@@ -362,6 +362,10 @@ Save frequently used todo patterns as reusable templates for instant creation of
 4. Click **"Save Template"**
 5. Template saved to your library
 
+You can also choose **Save as Template** on an existing task to capture its checklist. Checklist titles and ordering are saved as a snapshot; completed items are recreated unchecked. In the save dialog, edit **Template subtasks (one per line)** to customize that snapshot.
+
+**Due-date offset (minutes)** is optional for ordinary templates. When set, every use schedules the new task that many minutes after the current Singapore time. Recurring templates and templates with reminders require a positive whole-minute offset. A future draft due date pre-fills the relative offset; overdue tasks require a new offset before saving recurrence or reminders.
+
 ### Using Templates
 
 #### Quick Use from Dropdown
@@ -386,6 +390,7 @@ Access via **"📋 Templates"** button to:
 - See template details (name, description, category)
 - Preview settings (priority, recurrence)
 - Use templates with one click
+- Filter templates by category and edit saved patterns
 - Delete templates no longer needed
 
 #### Template Information Display
@@ -414,11 +419,14 @@ Templates preserve:
 - ✅ Reminder timing (minutes before due)
 - ✅ Category information
 - ✅ Description
+- ✅ Subtask titles and ordering (always recreated unchecked)
+- ✅ Optional relative due-date offset, recalculated on every use
 
 **Note**: Templates do NOT include:
-- ❌ Specific due dates (you set when creating)
-- ❌ Tags (selected when creating from template)
-- ❌ Subtasks (added after creation)
+- ❌ Specific due dates (only a relative offset is saved)
+- ❌ Tags (add them to the new todo after using the template)
+
+Editing or deleting a template never changes tasks already created from it. Template names can be duplicated; categories are free text.
 
 ### Template Categories
 

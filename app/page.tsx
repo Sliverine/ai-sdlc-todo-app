@@ -5,11 +5,12 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { AddPasskeyButton } from './AddPasskeyButton'
 import { LogoutButton } from './LogoutButton'
-import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Tag, Todo } from '@/lib/db'
+import type { Priority, RecurrencePattern, Subtask, Tag, Template, TemplateSubtask, Todo } from '@/lib/db'
+import { parseTemplateSubtasks } from '@/lib/template-utils'
 import { calculateProgress, sectionTodos } from '@/lib/todo-utils'
 import { useNotifications } from '@/lib/hooks/useNotifications'
 import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/reminders'
-import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
+import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, parseDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
 
 interface TodoForm {
   title: string
@@ -29,6 +30,21 @@ const emptyForm: TodoForm = {
   recurrence_pattern: 'daily',
   reminder_minutes: '',
   tag_ids: [],
+}
+
+interface TemplateEditor {
+  id: number | null
+  name: string
+  description: string
+  category: string
+  title_template: string
+  priority: Priority
+  is_recurring: boolean
+  recurrence_pattern: RecurrencePattern
+  reminder_minutes: string
+  offset: string
+  subtasks: TemplateSubtask[]
+  checklist: string
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -78,7 +94,45 @@ export default function HomePage() {
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const focusTodoIdRef = useRef<number | null>(null)
   const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all')
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [templatesLoading, setTemplatesLoading] = useState(true)
+  const [templateLoadError, setTemplateLoadError] = useState<string | null>(null)
+  const [templateLoadAttempt, setTemplateLoadAttempt] = useState(0)
+  const [templateDialog, setTemplateDialog] = useState<'save' | 'manage' | null>(null)
+  const [templateEditor, setTemplateEditor] = useState<TemplateEditor | null>(null)
+  const [templateCategory, setTemplateCategory] = useState('')
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [templateBusy, setTemplateBusy] = useState(false)
+  const templateActionRef = useRef(false)
+  const templateDialogRef = useRef<HTMLElement | null>(null)
   const notifications = useNotifications(!loading && !loadFailed)
+
+  useEffect(() => {
+    let active = true
+    async function loadTemplates() {
+      setTemplatesLoading(true)
+      try {
+        const saved = await readResponse<Template[]>(await fetch('/api/templates', { cache: 'no-store' }))
+        if (active) {
+          setTemplates(saved)
+          setTemplateLoadError(null)
+        }
+      } catch (error) {
+        if (active) setTemplateLoadError(error instanceof Error ? error.message : 'Templates could not be loaded.')
+      } finally {
+        if (active) setTemplatesLoading(false)
+      }
+    }
+    void loadTemplates()
+    return () => { active = false }
+  }, [templateLoadAttempt])
+
+  useEffect(() => {
+    if (!templateDialog) return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    templateDialogRef.current?.querySelector<HTMLElement>('input, select, button')?.focus()
+    return () => { if (previousFocus?.isConnected) previousFocus.focus() }
+  }, [templateDialog])
 
   useEffect(() => {
     let active = true
@@ -512,6 +566,157 @@ export default function HomePage() {
     }
   }
 
+  function openTemplateEditor(todo?: Todo) {
+    const source = todo ?? {
+      ...form,
+      reminder_minutes: form.reminder_minutes ? Number(form.reminder_minutes) : null,
+      subtasks: editingTodo ? todos.find((item) => item.id === editingTodo.id)?.subtasks ?? [] : [],
+    }
+    const parsedDate = parseDueDate(source.due_date)
+    const minutes = parsedDate.valid && parsedDate.value
+      ? Math.ceil((Date.parse(parsedDate.value) - getSingaporeNow().getTime()) / 60_000)
+      : 0
+    const subtasks = source.subtasks?.map(({ title, position }) => ({ title, position })) ?? []
+    setTemplateEditor({
+      id: null, name: '', description: '', category: '',
+      title_template: source.title,
+      priority: source.priority,
+      is_recurring: source.is_recurring,
+      recurrence_pattern: source.recurrence_pattern ?? 'daily',
+      reminder_minutes: source.reminder_minutes?.toString() ?? '',
+      offset: minutes >= 1 ? String(minutes) : '',
+      subtasks,
+      checklist: subtasks.map(({ title }) => title).join('\n'),
+    })
+    setTemplateError(null)
+    setTemplateDialog('save')
+  }
+
+  function editTemplate(template: Template) {
+    const subtasks = parseTemplateSubtasks(template.subtasks_json)
+    setTemplateEditor({
+      id: template.id, name: template.name,
+      description: template.description ?? '', category: template.category ?? '',
+      title_template: template.title_template, priority: template.priority,
+      is_recurring: template.is_recurring, recurrence_pattern: template.recurrence_pattern ?? 'daily',
+      reminder_minutes: template.reminder_minutes?.toString() ?? '',
+      offset: template.due_date_offset_minutes?.toString() ?? '',
+      subtasks, checklist: subtasks.map(({ title }) => title).join('\n'),
+    })
+    setTemplateError(null)
+    setTemplateDialog('save')
+  }
+
+  function closeTemplateDialog() {
+    if (templateActionRef.current) return
+    setTemplateDialog(null)
+    setTemplateError(null)
+  }
+
+  async function saveTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!templateEditor || templateActionRef.current) return
+    setTemplateError(null)
+    const draft = templateEditor
+    const offset = draft.offset.trim() ? Number(draft.offset) : null
+    if (!draft.name.trim() || !draft.title_template.trim()) {
+      setTemplateError('Name and title are required')
+      return
+    }
+    if (offset !== null && (!Number.isSafeInteger(offset) || offset < 1)) {
+      setTemplateError('Due-date offset must be a positive whole number of minutes')
+      return
+    }
+    if ((draft.is_recurring || draft.reminder_minutes) && offset === null) {
+      setTemplateError('Recurring templates and reminders require a due-date offset')
+      return
+    }
+    const subtasks = draft.checklist === draft.subtasks.map(({ title }) => title).join('\n')
+      ? draft.subtasks
+      : draft.checklist.split('\n').map((title) => title.trim()).filter(Boolean).map((title, position) => ({ title, position }))
+    templateActionRef.current = true
+    setTemplateBusy(true)
+    try {
+      const saved = await readResponse<Template>(await fetch(draft.id === null ? '/api/templates' : `/api/templates/${draft.id}`, {
+        method: draft.id === null ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: draft.name.trim(), description: draft.description.trim() || null,
+          category: draft.category.trim() || null,
+          title_template: draft.title_template.trim(), priority: draft.priority,
+          is_recurring: draft.is_recurring,
+          recurrence_pattern: draft.is_recurring ? draft.recurrence_pattern : null,
+          reminder_minutes: draft.reminder_minutes ? Number(draft.reminder_minutes) : null,
+          due_date_offset_minutes: offset, subtasks,
+        }),
+      }))
+      setTemplates((current) => draft.id === null ? [...current, saved] : current.map((item) => item.id === saved.id ? saved : item))
+      setTemplateCategory('')
+      setTemplateDialog(draft.id === null ? null : 'manage')
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : 'Could not save this template.')
+    } finally {
+      templateActionRef.current = false
+      setTemplateBusy(false)
+    }
+  }
+
+  async function applyTemplate(id: number) {
+    if (templateActionRef.current) return
+    templateActionRef.current = true
+    setTemplateBusy(true)
+    setTemplateError(null)
+    try {
+      const created = await readResponse<Todo>(await fetch(`/api/templates/${id}/use`, { method: 'POST' }))
+      setTodos((current) => [...current, created])
+      setTemplateDialog(null)
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : 'Could not use this template.')
+    } finally {
+      templateActionRef.current = false
+      setTemplateBusy(false)
+    }
+  }
+
+  async function deleteTemplate(template: Template) {
+    if (templateActionRef.current || !window.confirm(`Delete template "${template.name}"? Existing todos will not change.`)) return
+    templateActionRef.current = true
+    setTemplateBusy(true)
+    setTemplateError(null)
+    try {
+      await readResponse<{ success: boolean }>(await fetch(`/api/templates/${template.id}`, { method: 'DELETE' }))
+      setTemplates((current) => current.filter((item) => item.id !== template.id))
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : 'Could not delete this template.')
+    } finally {
+      templateActionRef.current = false
+      setTemplateBusy(false)
+    }
+  }
+
+  function containTemplateFocus(event: KeyboardEvent<HTMLElement>) {
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeTemplateDialog()
+    }
+    if (event.key !== 'Tab') return
+    const focusable = event.currentTarget.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+    )
+    const first = focusable.item(0)
+    const last = focusable.item(focusable.length - 1)
+    if (!first || !last) {
+      event.preventDefault()
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
   function renderTodoForm() {
     return (
       <form className="todo-create-form" onSubmit={(event) => void handleSubmit(event)}>
@@ -520,6 +725,19 @@ export default function HomePage() {
           <button className="quiet-button" type="button" onClick={() => setTagModalOpen(true)}>Manage tags</button>
           {editingTodo && <button className="quiet-button" type="button" onClick={cancelEditing}>Cancel</button>}
         </div>
+        {!editingTodo && <label className="todo-field template-quick-use">
+          <span>Use Template</span>
+          <select
+            disabled={templatesLoading || templateBusy || loading || loadFailed || templates.length === 0}
+            onChange={(event) => { if (event.target.value) void applyTemplate(Number(event.target.value)) }}
+            value=""
+          >
+            <option value="">{templatesLoading ? 'Loading templates...' : 'Choose a template'}</option>
+            {templates.map((template) => <option key={template.id} value={template.id}>
+              {template.name}{template.category ? ` (${template.category})` : ''}
+            </option>)}
+          </select>
+        </label>}
         <label className="todo-field todo-title-field">
           <span>Task</span>
           <input
@@ -628,6 +846,7 @@ export default function HomePage() {
             {loadFailed ? 'Tasks unavailable' : loading ? 'Loading tasks...' : saving ? 'Saving...' : editingTodo ? 'Save changes' : 'Add todo'}
           </button>
         </div>
+        {form.title.trim() && <button className="quiet-button template-save-trigger" disabled={saving || templatesLoading} onClick={() => openTemplateEditor()} type="button">Save as Template</button>}
         {formError && <p className="todo-error" role="alert">{formError}</p>}
       </form>
     )
@@ -762,6 +981,7 @@ export default function HomePage() {
                 </div>
                 <div className="todo-actions">
                   <button disabled={pendingTodoIds.includes(todo.id)} type="button" onClick={() => startEditing(todo)}>Edit</button>
+                  <button aria-label={`Save ${todo.title} as template`} disabled={templatesLoading || todo.id < 1 || pendingTodoIds.includes(todo.id)} type="button" onClick={() => openTemplateEditor(todo)}>Save as Template</button>
                   <button className="delete-action" disabled={pendingTodoIds.includes(todo.id)} type="button" onClick={() => void removeTodo(todo)}>Delete</button>
                 </div>
               </li>
@@ -850,11 +1070,152 @@ export default function HomePage() {
     )
   }
 
+  function renderTemplateDialog() {
+    if (!templateDialog) return null
+    const editing = templateDialog === 'save' ? templateEditor : null
+    const title = templateDialog === 'manage' ? 'Templates' : editing?.id ? 'Edit Template' : 'Save as Template'
+    const categories = [...new Set(templates.map((template) => template.category).filter((value): value is string => Boolean(value)))].sort()
+    const filtered = templates.filter((template) => !templateCategory || template.category === templateCategory)
+    const updateEditor = (fields: Partial<TemplateEditor>) => setTemplateEditor((current) => current ? { ...current, ...fields } : current)
+    return (
+      <div className="todo-dialog-backdrop template-dialog-backdrop" onClick={(event) => {
+        if (event.target === event.currentTarget) closeTemplateDialog()
+      }}>
+        <section
+          ref={templateDialogRef}
+          aria-labelledby="template-dialog-title"
+          aria-modal="true"
+          className="template-dialog"
+          onKeyDown={containTemplateFocus}
+          role="dialog"
+          tabIndex={-1}
+        >
+          <div className="todo-dialog-heading">
+            <h2 id="template-dialog-title">{title}</h2>
+            <button aria-label="Close templates dialog" className="dialog-close" disabled={templateBusy} onClick={closeTemplateDialog} type="button">&times;</button>
+          </div>
+          {templateError && <p className="todo-error" role="alert">{templateError}</p>}
+          {editing ? (
+            <form className="template-editor" onSubmit={(event) => void saveTemplate(event)}>
+              <fieldset disabled={templateBusy}>
+                <label className="todo-field">
+                  <span>Template name</span>
+                  <input autoComplete="off" onChange={(event) => updateEditor({ name: event.target.value })} required value={editing.name} />
+                </label>
+                <label className="todo-field">
+                  <span>Description</span>
+                  <textarea onChange={(event) => updateEditor({ description: event.target.value })} value={editing.description} />
+                </label>
+                <label className="todo-field">
+                  <span>Category</span>
+                  <input list="template-category-suggestions" onChange={(event) => updateEditor({ category: event.target.value })} value={editing.category} />
+                </label>
+                <datalist id="template-category-suggestions">
+                  {['Work', 'Personal', 'Finance', 'Health', 'Education'].map((category) => <option key={category} value={category} />)}
+                </datalist>
+                <label className="todo-field">
+                  <span>Template title</span>
+                  <input onChange={(event) => updateEditor({ title_template: event.target.value })} required value={editing.title_template} />
+                </label>
+                <label className="todo-field">
+                  <span>Template priority</span>
+                  <select onChange={(event) => updateEditor({ priority: event.target.value as Priority })} value={editing.priority}>
+                    <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+                  </select>
+                </label>
+                <label className="todo-field">
+                  <span>Due-date offset (minutes)</span>
+                  <input
+                    min="1" step="1" type="number"
+                    onChange={(event) => updateEditor({ offset: event.target.value })}
+                    required={editing.is_recurring || Boolean(editing.reminder_minutes)}
+                    value={editing.offset}
+                  />
+                </label>
+                <p className="workspace-note">Applied from the time you use the template, in Singapore time. Leave blank for no due date. Recurrence and reminders require an offset.</p>
+                <label className="recurring-control">
+                  <input checked={editing.is_recurring} onChange={(event) => updateEditor({ is_recurring: event.target.checked })} type="checkbox" />
+                  <span>Repeat template</span>
+                </label>
+                {editing.is_recurring && <label className="todo-field">
+                  <span>Template recurrence pattern</span>
+                  <select onChange={(event) => updateEditor({ recurrence_pattern: event.target.value as RecurrencePattern })} value={editing.recurrence_pattern}>
+                    <option value="daily">Daily</option><option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option><option value="yearly">Yearly</option>
+                  </select>
+                </label>}
+                <label className="todo-field">
+                  <span>Template reminder</span>
+                  <select onChange={(event) => updateEditor({ reminder_minutes: event.target.value })} value={editing.reminder_minutes}>
+                    <option value="">None</option>
+                    {REMINDER_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
+                  </select>
+                </label>
+                <label className="todo-field">
+                  <span>Template subtasks (one per line)</span>
+                  <textarea onChange={(event) => updateEditor({ checklist: event.target.value })} rows={5} value={editing.checklist} />
+                </label>
+                <p className="workspace-note">Checklist items are copied unchecked. Tags and concrete due dates are not saved.</p>
+                <button className="primary-button" disabled={!editing.name.trim() || !editing.title_template.trim()} type="submit">
+                  {templateBusy ? 'Saving...' : 'Save Template'}
+                </button>
+              </fieldset>
+            </form>
+          ) : (
+            <>
+              {templatesLoading && <p role="status">Loading templates...</p>}
+              {templateLoadError && <p className="todo-error" role="alert">{templateLoadError}</p>}
+              {templateLoadError && <button className="quiet-button" disabled={templatesLoading} onClick={() => setTemplateLoadAttempt((current) => current + 1)} type="button">Retry loading templates</button>}
+              <label className="todo-field template-category-filter">
+                <span>Filter templates by category</span>
+                <select onChange={(event) => setTemplateCategory(event.target.value)} value={templateCategory}>
+                  <option value="">All categories</option>
+                  {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+                </select>
+              </label>
+              <div className="template-list">
+                {!templatesLoading && !templateLoadError && filtered.length === 0 && <p className="workspace-note">No templates yet in this category. Save a task pattern to get started.</p>}
+                {filtered.map((template) => {
+                  const subtasks = parseTemplateSubtasks(template.subtasks_json)
+                  return (
+                    <article aria-label={template.name} className="template-card" key={template.id}>
+                      <div className="template-card-title">
+                        <strong>{template.name}</strong>
+                        {template.category && <span className="template-category-badge">{template.category}</span>}
+                      </div>
+                      {template.description && <p className="template-description">{template.description}</p>}
+                      <p className="template-description">{template.title_template}</p>
+                      <div className="todo-metadata">
+                        <span className={`priority-badge priority-badge-${template.priority}`}>{template.priority}</span>
+                        {template.is_recurring && <span className="recurrence-badge">&#128260; {template.recurrence_pattern}</span>}
+                        {template.reminder_minutes != null && <span aria-label={`Reminder ${reminderLabel(template.reminder_minutes)}`} className="reminder-badge">&#128276; {reminderLabel(template.reminder_minutes)}</span>}
+                      </div>
+                      <p className="workspace-note">{template.due_date_offset_minutes === null ? 'No due date' : `Due ${template.due_date_offset_minutes} minutes after use`}</p>
+                      {subtasks.length > 0 && <ul aria-label="Template checklist" className="template-checklist">
+                        {subtasks.map((subtask, index) => <li key={index}>{subtask.title}</li>)}
+                      </ul>}
+                      <div className="template-actions">
+                        <button className="primary-button" disabled={templateBusy || loading || loadFailed} onClick={() => void applyTemplate(template.id)} type="button">Use</button>
+                        <button className="quiet-button" disabled={templateBusy} onClick={() => editTemplate(template)} type="button">Edit</button>
+                        <button className="quiet-button delete-action" disabled={templateBusy} onClick={() => void deleteTemplate(template)} type="button">Delete</button>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    )
+  }
+
   return (
     <main className="workspace-shell">
       <header className="workspace-header">
         <Link className="wordmark" href="/">Daymark</Link>
         <nav className="workspace-nav" aria-label="Workspace">
+          <button className="quiet-button" onClick={() => { setTemplateError(null); setTemplateCategory(''); setTemplateDialog('manage') }} type="button">Templates</button>
           <button className={`quiet-button notification-toggle ${notifications.permission === 'granted' ? 'notification-enabled' : ''}`}
             disabled={!notifications.supported || notifications.permission !== 'default'}
             onClick={() => void notifications.requestPermission()} type="button">
@@ -881,6 +1242,10 @@ export default function HomePage() {
         {!notifications.supported && !loading && <p className="workspace-note">Desktop notifications are unavailable in this browser.</p>}
         {notifications.permission === 'denied' && <p className="workspace-note">Allow notifications in browser site settings, then reload this page.</p>}
         {notifications.error && <p className="todo-page-error" role="alert">{notifications.error}</p>}
+        {!templateDialog && templateError && <p className="todo-page-error" role="alert">{templateError}</p>}
+        {templateLoadError && !templateDialog && <p className="todo-page-error" role="alert">
+          {templateLoadError} <button className="quiet-button" disabled={templatesLoading} onClick={() => setTemplateLoadAttempt((current) => current + 1)} type="button">Retry loading templates</button>
+        </p>}
 
         {!editingTodo && renderTodoForm()}
         <div className="todo-list-heading">
@@ -930,6 +1295,7 @@ export default function HomePage() {
         </div>
       )}
       {renderTagModal()}
+      {renderTemplateDialog()}
     </main>
   )
 }

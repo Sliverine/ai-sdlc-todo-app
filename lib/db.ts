@@ -5,6 +5,13 @@ import { getSingaporeNow, parseDueDate } from './timezone'
 import type { Priority } from './priority'
 import { TodoValidationError } from './todo-errors'
 import { calculateNextDueDate } from './recurrence'
+import {
+  calculateTemplateDueDate,
+  parseTemplateSubtasks,
+  validateCreateTemplateDto,
+  validateTemplateConfiguration,
+  validateTemplateUpdateDto,
+} from './template-utils'
 
 export { PRIORITY_ORDER, PRIORITY_VALUES } from './priority'
 export type { Priority } from './priority'
@@ -122,10 +129,28 @@ export interface Template {
   priority: Priority
   is_recurring: boolean
   recurrence_pattern: RecurrencePattern | null
-  reminder_minutes: number | null
+  reminder_minutes: ReminderMinutes | null
   due_date_offset_minutes: number | null
   subtasks_json: string | null
   created_at: string
+}
+
+export interface TemplateSubtask {
+  title: string
+  position: number
+}
+
+export interface CreateTemplateDto {
+  name: string
+  description?: string | null
+  category?: string | null
+  title_template: string
+  priority?: Priority
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePattern | null
+  reminder_minutes?: number | null
+  due_date_offset_minutes?: number | null
+  subtasks?: TemplateSubtask[]
 }
 
 export interface Holiday {
@@ -227,6 +252,7 @@ const schema = `
     subtasks_json TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+  CREATE INDEX IF NOT EXISTS idx_templates_user_id ON templates(user_id);
 
   CREATE TABLE IF NOT EXISTS holidays (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -349,8 +375,25 @@ interface SubtaskRow extends Omit<Subtask, 'completed'> {
   completed: number
 }
 
+interface TemplateRow extends Omit<Template, 'is_recurring' | 'reminder_minutes'> {
+  is_recurring: number
+  reminder_minutes: number | null
+}
+
 function mapTodoRow(row: TodoRow): Todo {
   return { ...row, completed: Boolean(row.completed), is_recurring: Boolean(row.is_recurring) }
+}
+
+function mapTemplateRow(row: TemplateRow): Template {
+  const reminders: ReminderMinutes[] = [15, 30, 60, 120, 1440, 2880, 10080]
+  if (row.reminder_minutes !== null && !reminders.includes(row.reminder_minutes as ReminderMinutes)) {
+    throw new Error('Stored template reminder interval is invalid')
+  }
+  return {
+    ...row,
+    is_recurring: Boolean(row.is_recurring),
+    reminder_minutes: row.reminder_minutes as ReminderMinutes | null,
+  }
 }
 
 function assertTodoConfiguration(
@@ -619,6 +662,136 @@ export const db = createDatabase(process.env.DATABASE_PATH ?? join(process.cwd()
 export const todoDB = createTodoDB(db)
 export const subtaskDB = createSubtaskDB(db)
 export const holidayDB = createHolidayDB(db)
+
+export function createTemplateDB(database: Database.Database) {
+  const todos = createTodoDB(database)
+
+  function findById(id: number, userId: number): Template | null {
+    const row = database.prepare('SELECT * FROM templates WHERE id = ? AND user_id = ?')
+      .get(id, userId) as TemplateRow | undefined
+    return row ? mapTemplateRow(row) : null
+  }
+
+  return {
+    create(input: CreateTemplateDto & { user_id: number }): Template {
+      const { user_id: userId, ...templateInput } = input
+      const validated = validateCreateTemplateDto(templateInput)
+      const result = database.prepare(`
+        INSERT INTO templates (
+          user_id, name, description, category, title_template, priority,
+          is_recurring, recurrence_pattern, reminder_minutes, due_date_offset_minutes,
+          subtasks_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        userId,
+        validated.name,
+        validated.description ?? null,
+        validated.category ?? null,
+        validated.title_template,
+        validated.priority ?? 'medium',
+        (validated.is_recurring ?? false) ? 1 : 0,
+        validated.recurrence_pattern ?? null,
+        validated.reminder_minutes ?? null,
+        validated.due_date_offset_minutes ?? null,
+        validated.subtasks === undefined ? null : JSON.stringify(validated.subtasks),
+        getSingaporeNow().toISOString(),
+      )
+      const created = findById(Number(result.lastInsertRowid), userId)
+      if (!created) throw new Error('Unable to create template')
+      return created
+    },
+
+    findAllByUser(userId: number): Template[] {
+      const rows = database.prepare(`
+        SELECT * FROM templates WHERE user_id = ? ORDER BY created_at DESC, id DESC
+      `).all(userId) as TemplateRow[]
+      return rows.map(mapTemplateRow)
+    },
+
+    findById,
+
+    update(id: number, userId: number, input: Partial<CreateTemplateDto>): Template | null {
+      const updateTransaction = database.transaction(() => {
+        const current = findById(id, userId)
+        if (!current) return null
+
+        const validated = validateTemplateUpdateDto(input)
+        validateTemplateConfiguration({
+          is_recurring: validated.is_recurring ?? current.is_recurring,
+          recurrence_pattern: validated.recurrence_pattern === undefined
+            ? current.recurrence_pattern
+            : validated.recurrence_pattern,
+          reminder_minutes: validated.reminder_minutes === undefined
+            ? current.reminder_minutes
+            : validated.reminder_minutes,
+          due_date_offset_minutes: validated.due_date_offset_minutes === undefined
+            ? current.due_date_offset_minutes
+            : validated.due_date_offset_minutes,
+        })
+
+        const assignments: string[] = []
+        const values: unknown[] = []
+        const addField = (column: string, value: unknown) => {
+          assignments.push(`${column} = ?`)
+          values.push(value)
+        }
+
+        if (validated.name !== undefined) addField('name', validated.name)
+        if (validated.description !== undefined) addField('description', validated.description)
+        if (validated.category !== undefined) addField('category', validated.category)
+        if (validated.title_template !== undefined) addField('title_template', validated.title_template)
+        if (validated.priority !== undefined) addField('priority', validated.priority)
+        if (validated.is_recurring !== undefined) addField('is_recurring', validated.is_recurring ? 1 : 0)
+        if (validated.recurrence_pattern !== undefined) addField('recurrence_pattern', validated.recurrence_pattern)
+        if (validated.reminder_minutes !== undefined) addField('reminder_minutes', validated.reminder_minutes)
+        if (validated.due_date_offset_minutes !== undefined) {
+          addField('due_date_offset_minutes', validated.due_date_offset_minutes)
+        }
+        if (validated.subtasks !== undefined) addField('subtasks_json', JSON.stringify(validated.subtasks))
+
+        if (assignments.length > 0) {
+          database.prepare(`UPDATE templates SET ${assignments.join(', ')} WHERE id = ? AND user_id = ?`)
+            .run(...values, id, userId)
+        }
+        return findById(id, userId)
+      })
+      return updateTransaction()
+    },
+
+    delete(id: number, userId: number): boolean {
+      return database.prepare('DELETE FROM templates WHERE id = ? AND user_id = ?').run(id, userId).changes === 1
+    },
+
+    use(id: number, userId: number): Todo | null {
+      const useTransaction = database.transaction(() => {
+        const template = findById(id, userId)
+        if (!template) return null
+
+        const todo = todos.create({
+          user_id: userId,
+          title: template.title_template,
+          due_date: calculateTemplateDueDate(template.due_date_offset_minutes),
+          priority: template.priority,
+          is_recurring: template.is_recurring,
+          recurrence_pattern: template.recurrence_pattern,
+          reminder_minutes: template.reminder_minutes,
+        })
+        const insertSubtask = database.prepare(`
+          INSERT INTO subtasks (todo_id, title, completed, position, created_at)
+          VALUES (?, ?, 0, ?, ?)
+        `)
+        const createdAt = getSingaporeNow().toISOString()
+        for (const subtask of parseTemplateSubtasks(template.subtasks_json)) {
+          insertSubtask.run(todo.id, subtask.title, subtask.position, createdAt)
+        }
+        return todos.findById(todo.id, userId)
+      })
+      return useTransaction()
+    },
+  }
+}
+
+export const templateDB = createTemplateDB(db)
 
 export function createTagDB(database: Database.Database) {
   function normalizeName(value: string | undefined): string {

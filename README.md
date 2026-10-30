@@ -4,7 +4,15 @@ This walkthrough will guide you from zero to running the Todo App with GitHub Co
 
 ## Current Implementation: Reminders and Prerequisites
 
-The application now includes the foundation needed for [PRP 04](PRPs/04-reminders-notifications.md): passkey registration/login, SQLite persistence, todo CRUD, priority, recurrence, reminder selection, and browser notification polling. Later features described in this guide (subtasks UI, tag management, templates, search presets, import/export, and calendar) are not implemented by this feature increment.
+The application includes passkey registration/login, SQLite persistence, todo CRUD, priority, recurrence, reminders, subtasks, tag management, and the [PRP 07 template system](PRPs/07-template-system.md). Search presets, import/export, and the full calendar remain planned.
+
+### Template system (PRP 07)
+
+Templates now support saving a todo draft or existing task (including its checklist), quick creation, and a manager with category filtering, editing, and confirmed deletion. Use **Save as Template** in the form or on an existing task, or open **Templates** in the navigation. Subtasks are copied unchecked; tags are never copied. A positive whole-minute due-date offset is resolved from the time of use in Singapore time. Recurrence and reminders require that offset; ordinary templates can omit it.
+
+Template APIs are authenticated and user-scoped: `GET/POST /api/templates`, `PUT/DELETE /api/templates/[id]`, and `POST /api/templates/[id]/use`. Instantiation creates the todo and checklist atomically; editing or deleting a template never changes previously created tasks. Invalid stored checklist JSON is logged and treated as an empty checklist.
+
+Focused validation uses the template Vitest database, route, utility, and UI tests plus `npm run typecheck`. Playwright and production builds are intentionally excluded from this increment's validation at the user's request.
 
 ### Run locally
 
