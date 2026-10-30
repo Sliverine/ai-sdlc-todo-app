@@ -20,6 +20,10 @@ The target is one Next.js 16 App Router application with React 19, Tailwind CSS 
 - **Client experience:** A main client todo page owns list workflows and feature UI; separate login and calendar pages provide authentication and calendar views. Keep the main todo page monolithic as specified by project conventions.
 - **Quality and delivery:** Unit/integration tests cover logic and persistence; Playwright covers user flows including virtual WebAuthn. Build, lint, type safety, accessibility, security, performance, and persistent deployment are evaluation concerns.
 
+## Project Structure
+
+`README.md` section 4, **Project Structure Verification**, is the canonical target hierarchy. Keep `PRPs/` at the repository root; `.github/` contains Copilot instructions, not PRPs. The current repository is planning/reference documentation only, so scaffold the application hierarchy at the repository root when implementation begins. Any future hierarchy change must update the README and both agent instruction files in the same task.
+
 ## Dependency-Safe Build Order
 
 The one-shot build order and the PRP index differ. Use this sequence because it satisfies both the shared API authentication contract and the feature dependencies described by the detailed PRPs:
@@ -105,4 +109,3 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 - Evaluation and the PRP index describe search over tag names in places, while the one-shot and detailed search behavior specify titles and subtasks.
 - Test counts vary: the one-shot enumerates 12 Playwright specs, while other documentation says 11 feature suites. Due-date tests may be included in the CRUD suite; preserve behavior coverage rather than forcing a file count.
 - The security and testing rules add expectations not fully enumerated in the one-shot, including CSRF/rate limiting and unit/integration coverage. Treat them as additional project quality gates.
-- Additional mismatches in authentication entry points and enrollment, calendar row count, reminder delivery, template failure behavior, timestamp representation, and tag contrast are resolved in Approved Clarifications above. Their source documents remain unchanged by this synchronization update.

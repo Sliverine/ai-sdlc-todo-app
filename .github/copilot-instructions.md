@@ -112,6 +112,10 @@ sqlite3 todos.db
 
 ## Project-Specific Conventions
 
+### Project Structure
+
+`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when scaffolding, adding, or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. This repository currently contains planning/reference documentation only; create the target application structure at the repository root when implementation begins. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
+
 ### 1. Client vs Server Components
 - Main pages (`app/page.tsx`, `app/calendar/page.tsx`) are `'use client'` - they manage state and fetch from API routes
 - API routes handle all database operations server-side

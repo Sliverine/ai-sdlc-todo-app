@@ -202,23 +202,37 @@ added 345 packages, and audited 346 packages in 45s
 ```
 
 ### Project Structure Verification
-Ensure you have these key files:
+The repository currently contains planning and reference documentation. When scaffolding the application, use this target hierarchy at the repository root. PRPs are kept in the root `PRPs/` directory, not under `.github/`.
+
 ```
 todo-app/
+├── AGENT_SYNC.md
+├── CLAUDE.md
 ├── .github/
-│   ├── copilot-instructions.md    ← Copilot will read this
-│   └── PRPs/
-│       └── todo-app-core-features.md  ← Product requirements
+│   └── copilot-instructions.md
+├── PRPs/
+│   ├── 00-one-shot-implementation.md
+│   └── 01-11 feature PRPs
 ├── app/
-│   ├── page.tsx
+│   ├── api/
+│   ├── calendar/page.tsx
+│   ├── login/page.tsx
 │   ├── layout.tsx
-│   └── api/
+│   └── page.tsx
 ├── lib/
 │   ├── db.ts
 │   ├── auth.ts
-│   └── timezone.ts
+│   ├── timezone.ts
+│   └── hooks/useNotifications.ts
+├── scripts/
+│   └── seed-holidays.ts
+├── tests/
+│   ├── helpers.ts
+│   └── *.spec.ts
+├── middleware.ts
 ├── package.json
 ├── next.config.ts
+├── playwright.config.ts
 └── README.md
 ```
 
@@ -285,7 +299,7 @@ code .
 @workspace What are the acceptance criteria for the recurring todos feature?
 ```
 
-Copilot will reference `.github/PRPs/todo-app-core-features.md` and list:
+Copilot will reference `PRPs/03-recurring-todos.md` and list:
 - Can create recurring todo with pattern
 - Completing recurring todo creates next instance
 - Next instance has correct due date
