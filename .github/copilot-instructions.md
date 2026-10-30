@@ -169,6 +169,10 @@ import { Priority, RecurrencePattern, Todo, Template } from '@/lib/db';
 4. **Recurring todos need special handling** - see PUT `/api/todos/[id]` for completion logic
 5. **WebAuthn credentials use base64/base64url encoding** - buffer conversions required
 
+## Cross-Agent Synchronization
+
+Before designing or implementing, read the root `AGENT_SYNC.md` and the relevant task-specific PRP. Update `AGENT_SYNC.md` in the same task with every design decision and implementation change, briefly recording what changed and its rationale or behavior. Never delete, rename, or replace `AGENT_SYNC.md`.
+
 ## File Reference
 
 - **Auth**: `lib/auth.ts`, `middleware.ts`, `app/api/auth/**`

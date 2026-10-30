@@ -181,7 +181,12 @@ import { Priority, RecurrencePattern, Todo, Template } from '@/lib/db';
 
 ## Related Documentation
 
+- **`AGENT_SYNC.md`** - shared cross-agent system design decisions, dependency-safe build order, and resolved documentation conflicts. Read it before designing or implementing; update it with shared design decisions and implementation changes. **Do not delete or rename it.**
 - **`PRPs/`** - Product Requirement Prompts, one per feature (schema, endpoints, UI, edge cases, acceptance criteria, tests). Read the relevant PRP before implementing or modifying a feature. Start at `PRPs/README.md`.
 - **`USER_GUIDE.md`** - comprehensive user-facing feature documentation (2000+ lines)
 - **`EVALUATION.md`** - feature completeness checklist, acceptance criteria, and deployment (Railway/Vercel) guidance
 - **`.github/copilot-instructions.md`** - equivalent instructions written for GitHub Copilot; keep in sync with this file if either changes
+
+## Cross-Agent Synchronization
+
+Before designing or implementing, read the root `AGENT_SYNC.md` and the relevant task-specific PRP. Update `AGENT_SYNC.md` in the same task with every design decision and implementation change, briefly recording what changed and its rationale or behavior. Never delete, rename, or replace `AGENT_SYNC.md`.
