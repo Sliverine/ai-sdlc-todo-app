@@ -109,6 +109,23 @@ export interface Tag {
   created_at: string
 }
 
+export interface TodoExportItem extends Omit<Todo, 'id' | 'user_id' | 'updated_at' | 'last_notification_sent' | 'subtasks' | 'tags'> {
+  subtasks: Array<Pick<Subtask, 'title' | 'completed' | 'position'>>
+  tags: Array<Pick<Tag, 'name' | 'color'>>
+}
+
+export interface TodoExport {
+  version: 1
+  exported_at: string
+  todos: TodoExportItem[]
+}
+
+export interface ImportResult {
+  imported: number
+  tagsCreated: number
+  tagsReused: number
+}
+
 export interface CreateTagInput {
   name: string
   color?: string
@@ -502,6 +519,69 @@ export function createTodoDB(database: Database.Database) {
     findAllByUser(userId: number): Todo[] {
       const rows = database.prepare('SELECT * FROM todos WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(userId) as TodoRow[]
       return withRelations(rows)
+    },
+
+    importAll(userId: number, items: TodoExportItem[]): ImportResult {
+      let tagsCreated = 0
+      let tagsReused = 0
+      const importTransaction = database.transaction(() => {
+        const insertTodo = database.prepare(`
+          INSERT INTO todos (
+            user_id, title, completed, due_date, priority, is_recurring,
+            recurrence_pattern, reminder_minutes, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        const insertSubtask = database.prepare(`
+          INSERT INTO subtasks (todo_id, title, completed, position, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `)
+        const findTagByName = database.prepare(`
+          SELECT id FROM tags
+          WHERE user_id = ? AND name = ? COLLATE NOCASE
+          ORDER BY id LIMIT 1
+        `)
+        const insertTag = database.prepare(
+          'INSERT INTO tags (user_id, name, color, created_at) VALUES (?, ?, ?, ?)',
+        )
+        const linkTag = database.prepare('INSERT OR IGNORE INTO todo_tags (todo_id, tag_id) VALUES (?, ?)')
+
+        for (const item of items) {
+          const createdAt = getSingaporeNow().toISOString()
+          const result = insertTodo.run(
+            userId,
+            item.title,
+            item.completed ? 1 : 0,
+            item.due_date,
+            item.priority,
+            item.is_recurring ? 1 : 0,
+            item.recurrence_pattern,
+            item.reminder_minutes,
+            item.created_at,
+          )
+          const todoId = Number(result.lastInsertRowid)
+
+          item.subtasks.forEach((subtask, position) => {
+            insertSubtask.run(todoId, subtask.title, subtask.completed ? 1 : 0, position, createdAt)
+          })
+
+          for (const tag of item.tags) {
+            const existing = findTagByName.get(userId, tag.name) as { id: number } | undefined
+            let tagId: number
+            if (existing) {
+              tagsReused += 1
+              tagId = existing.id
+            } else {
+              const inserted = insertTag.run(userId, tag.name, tag.color, createdAt)
+              tagsCreated += 1
+              tagId = Number(inserted.lastInsertRowid)
+            }
+            linkTag.run(todoId, tagId)
+          }
+        }
+      })
+
+      importTransaction()
+      return { imported: items.length, tagsCreated, tagsReused }
     },
 
     findById,

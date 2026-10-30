@@ -29,9 +29,14 @@ async function registerTodoUser(page: Page) {
 }
 
 async function createPriorityTodo(page: Page, title: string, priority?: 'high' | 'medium' | 'low') {
-  await page.getByLabel('Task').fill(title)
-  if (priority) await page.getByLabel('Priority', { exact: true }).selectOption(priority)
+  await page.locator('.todo-create-form .todo-title-field input').fill(title)
+  if (priority) await page.locator('.todo-create-form .todo-form-grid select').first().selectOption(priority)
+  const responsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'POST' && response.url().endsWith('/api/todos'),
+  )
   await page.getByRole('button', { name: 'Add todo' }).click()
+  const response = await responsePromise
+  expect(response.ok()).toBe(true)
   await expect(page.locator('.todo-row').filter({ hasText: title })).toBeVisible()
 }
 
@@ -82,22 +87,36 @@ test('shows color-coded priorities, filters the list, and re-sorts edited todos'
 
   await page.getByLabel('Filter by priority').selectOption('all')
   await page.locator('.todo-row').filter({ hasText: priorityTitles.low }).getByRole('button', { name: 'Edit' }).click()
-  await page.getByRole('dialog').getByLabel('Priority', { exact: true }).selectOption('high')
+  await page.getByRole('dialog').locator('.todo-form-grid select').first().selectOption('high')
   await page.getByRole('button', { name: 'Save changes' }).click()
-  await expect(page.locator('.pending-section .todo-row').first()).toContainText(priorityTitles.high)
+  await expect(page.locator('.pending-section .todo-title')).toHaveText([
+    priorityTitles.high,
+    priorityTitles.low,
+    priorityTitles.medium,
+  ])
 
   await page.getByLabel('Filter by priority').selectOption('high')
   await expect(page.locator('.todo-row')).toHaveCount(2)
   await expect(page.locator('.todo-row').filter({ hasText: priorityTitles.low })).toContainText('High')
+  await page.locator('.todo-row').filter({ hasText: priorityTitles.high }).getByRole('button', { name: 'Edit' }).click()
+  await page.getByRole('dialog').locator('.todo-form-grid select').first().selectOption('low')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.locator('.todo-row')).toHaveCount(1)
+  await expect(page.locator('.todo-row').filter({ hasText: priorityTitles.high })).toHaveCount(0)
+
+  await page.getByLabel('Filter by priority').selectOption('all')
+  const mediumRow = page.locator('.pending-section .todo-row').filter({ hasText: priorityTitles.medium })
+  await mediumRow.getByRole('checkbox').click()
+  await expect(page.locator('.completed-section .priority-badge')).toHaveText('Medium')
   await cdp.detach()
 })
 
 test('uses system light and dark themes with readable priority badges', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/login')
-  const lightAuthSurface = await page.locator('.auth-panel').evaluate((element) => getComputedStyle(element).backgroundColor)
+  const lightAuthSurface = await page.locator('.auth-shell').evaluate((element) => getComputedStyle(element).backgroundColor)
   await page.emulateMedia({ colorScheme: 'dark' })
-  const darkAuthSurface = await page.locator('.auth-panel').evaluate((element) => getComputedStyle(element).backgroundColor)
+  const darkAuthSurface = await page.locator('.auth-shell').evaluate((element) => getComputedStyle(element).backgroundColor)
   expect(darkAuthSurface).not.toBe(lightAuthSurface)
 
   const cdp = await registerTodoUser(page)
