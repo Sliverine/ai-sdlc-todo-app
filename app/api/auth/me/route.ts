@@ -1,8 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { apiHandler } from '@/lib/api';
+import { NextResponse } from 'next/server'
+import { getSession } from '@/lib/auth'
+import { userDB } from '@/lib/db'
 
-export const runtime = 'nodejs';
+export async function GET() {
+  const session = await getSession()
+  if (!session) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-export async function GET(request: NextRequest) {
-  return apiHandler(request, (session) => NextResponse.json(session));
+  const user = userDB.findById(session.userId)
+  if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+  return NextResponse.json({ user: { id: user.id, username: user.username } })
 }

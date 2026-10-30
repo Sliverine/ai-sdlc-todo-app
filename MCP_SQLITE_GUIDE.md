@@ -8,7 +8,15 @@ Model Context Protocol (MCP) allows Claude Code to connect to external data sour
 
 ## Configuration
 
-The MCP server has been configured in `~/.claude/mcp.json`:
+Add the server to your Claude Code user-level MCP configuration. The exact location depends on your platform and Claude Code installation:
+
+| Platform | Example configuration path |
+|---|---|
+| macOS or Linux | `~/.claude/mcp.json` |
+| Windows PowerShell | `$HOME\.claude\mcp.json` |
+| Windows Command Prompt | `%USERPROFILE%\.claude\mcp.json` |
+
+Replace both path placeholders below with absolute paths for your machine. Do not copy another contributor's home directory or global package installation path.
 
 ```json
 {
@@ -16,8 +24,8 @@ The MCP server has been configured in `~/.claude/mcp.json`:
     "todo-app-sqlite": {
       "command": "node",
       "args": [
-        "/home/kenneth/.nvm/versions/node/v22.14.0/lib/node_modules/mcp-sqlite/mcp-sqlite-server.js",
-        "/home/kenneth/Projects/web-test-demo/todo-app/todos.db"
+        "<absolute-path-to-mcp-sqlite-server.js>",
+        "<absolute-path-to-project>/todos.db"
       ]
     }
   }
@@ -168,14 +176,10 @@ GROUP BY t.id;
 ### MCP Server Not Connecting
 
 1. **Check configuration file exists:**
-   ```bash
-   ls -la ~/.claude/mcp.json
-   ```
+  Confirm the user-level MCP configuration exists at the platform-appropriate path listed above.
 
 2. **Verify database path:**
-   ```bash
-   ls -la /home/kenneth/Projects/web-test-demo/todo-app/todos.db
-   ```
+  Confirm the configured database path points to the project's `todos.db` file. For example, use `Test-Path 'C:\path\to\project\todos.db'` in PowerShell or `test -f '/path/to/project/todos.db'` on macOS/Linux.
 
 3. **Check MCP server installation:**
    ```bash
@@ -195,10 +199,7 @@ If you get a "database is locked" error:
 
 ### Permission Errors
 
-Ensure you have read/write permissions:
-```bash
-chmod 644 /home/kenneth/Projects/web-test-demo/todo-app/todos.db
-```
+Ensure your account has read/write permission for the database file and its containing directory using your operating system's file-permission tools. Permission commands vary by platform; avoid applying a generic permission change to a database containing user data.
 
 ## Benefits of Using MCP
 

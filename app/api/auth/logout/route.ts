@@ -1,12 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { apiHandler } from '@/lib/api';
-import { deleteSession } from '@/lib/auth';
-
-export const runtime = 'nodejs';
+import { NextRequest, NextResponse } from 'next/server'
+import { deleteSession } from '@/lib/auth'
+import { isSameOriginRequest } from '@/lib/auth-route-utils'
 
 export async function POST(request: NextRequest) {
-  return apiHandler(request, async () => {
-    await deleteSession();
-    return NextResponse.json({ success: true });
-  }, { public: true });
+  if (!isSameOriginRequest(request)) {
+    return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 })
+  }
+  await deleteSession()
+  return NextResponse.json({ success: true })
 }

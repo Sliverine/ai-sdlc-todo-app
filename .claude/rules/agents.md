@@ -2,19 +2,19 @@
 
 ## Available Agents
 
-Located in `~/.claude/agents/`:
+Located in the repository's `.claude/agents/` directory:
 
-| Agent | Purpose | When to Use |
+| Agent File | Purpose | When to Use |
 |-------|---------|-------------|
-| planner | Implementation planning | Complex features, refactoring |
-| architect | System design | Architectural decisions |
-| tdd-guide | Test-driven development | New features, bug fixes |
-| code-reviewer | Code review | After writing code |
-| security-reviewer | Security analysis | Before commits |
-| build-error-resolver | Fix build errors | When build fails |
-| e2e-runner | E2E testing | Critical user flows |
-| refactor-cleaner | Dead code cleanup | Code maintenance |
-| doc-updater | Documentation | Updating docs |
+| `planner.md` | Implementation planning | Complex features, refactoring |
+| `architect.md` | System design | Architectural decisions |
+| `tdd-guide.md` | Test-driven development | New features, bug fixes |
+| `code-reviewer.md` | Code review | After writing code |
+| `security-reviewer.md` | Security analysis | Before commits |
+| `build-error-resolver.md` | Fix build errors | When build fails |
+| `e2e-runner.md` | E2E testing | Critical user flows |
+| `refactor-cleaner.md` | Dead code cleanup | Code maintenance |
+| `doc-updater.md` | Documentation | Updating docs |
 
 ## Immediate Agent Usage
 

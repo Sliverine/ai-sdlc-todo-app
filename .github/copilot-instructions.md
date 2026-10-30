@@ -17,7 +17,7 @@ This is a **Next.js 16** todo application with WebAuthn authentication, using **
 - **WebAuthn only** - no traditional passwords
 - Uses `@simplewebauthn/server` and `@simplewebauthn/browser` libraries
 - Session tokens stored as HTTP-only cookies via `lib/auth.ts` (JWT with 7-day expiry)
-- Middleware (`middleware.ts`) protects `/` and `/calendar` routes
+- Proxy (`proxy.ts`) protects `/` and `/calendar` routes
 - When modifying authenticator logic, **always use `?? 0` for counter field** to handle undefined values:
   ```typescript
   counter: authenticator.counter ?? 0
@@ -114,7 +114,7 @@ sqlite3 todos.db
 
 ### Project Structure
 
-`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when scaffolding, adding, or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. This repository currently contains planning/reference documentation only; create the target application structure at the repository root when implementation begins. If the hierarchy changes, update the README, both agent instruction files, and `AGENT_SYNC.md` together.
+`README.md` section 4, **Project Structure Verification**, defines the target hierarchy. Follow it when adding or moving files: keep `PRPs/` at the repository root, application routes under `app/`, shared logic under `lib/`, tests under `tests/`, seed scripts under `scripts/`, and Copilot instructions under `.github/`. Do not create duplicate or alternate trees such as `.github/PRPs/`. The repository now has an in-progress application scaffold; add remaining features within the existing hierarchy. If the hierarchy changes, update the README and both agent instruction files together.
 
 ### 1. Client vs Server Components
 - Main pages (`app/page.tsx`, `app/calendar/page.tsx`) are `'use client'` - they manage state and fetch from API routes
@@ -173,13 +173,17 @@ import { Priority, RecurrencePattern, Todo, Template } from '@/lib/db';
 4. **Recurring todos need special handling** - see PUT `/api/todos/[id]` for completion logic
 5. **WebAuthn credentials use base64/base64url encoding** - buffer conversions required
 
-## Cross-Agent Synchronization
+## Team Collaboration
 
-Before designing or implementing, read the root `AGENT_SYNC.md` and the relevant task-specific PRP. Update `AGENT_SYNC.md` in the same task with every design decision and implementation change, briefly recording what changed and its rationale or behavior. Never delete, rename, or replace `AGENT_SYNC.md`.
+- Before starting work, check `git status --short --branch` and fetch the configured remote. If the worktree is clean and the branch has an upstream, use `git pull --ff-only`; do not pull over local edits.
+- If local edits, divergence, or conflicts prevent a safe fast-forward, preserve all work and coordinate with its owner. Never reset, discard, or overwrite another contributor's changes.
+- Review status and diffs before editing and committing; stage only task-related files. Coordinate before parallel edits to shared contracts such as `lib/db.ts` and `app/page.tsx`.
+- Follow the relevant PRP and README hierarchy. Keep database access server-side, scope user data to `session.userId`, use prepared statements and transactions, and route application date/time logic through `lib/timezone.ts`.
+- Consult or update `AGENT_SYNC.md` only when the user explicitly asks. If asked to update it, record only core cross-cutting decisions, such as architecture, shared contracts, security, or product behavior; omit routine implementation details.
 
 ## File Reference
 
-- **Auth**: `lib/auth.ts`, `middleware.ts`, `app/api/auth/**`
+- **Auth**: `lib/auth.ts`, `proxy.ts`, `app/api/auth/**`
 - **Database**: `lib/db.ts` (single file, ~700 lines)
 - **Timezone**: `lib/timezone.ts`
 - **Main UI**: `app/page.tsx` (~2200 lines, feature-rich)

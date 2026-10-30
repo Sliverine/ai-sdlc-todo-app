@@ -1,11 +1,15 @@
-import type { Metadata } from "next";
-import "./globals.css";
+import type { Metadata } from 'next'
+import './globals.css'
 
 export const metadata: Metadata = {
-  title: "Singapore Todo",
-  description: "Passkey-protected todos with Singapore-time reminders.",
-};
+  title: 'Todo App',
+  description: 'Private, passkey-protected task management.',
+}
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  )
 }

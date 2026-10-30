@@ -2,6 +2,7 @@
   "name": "ai-sdlc-todo-app",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,6 +10,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test"
   },
@@ -31,12 +33,12 @@
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "@vitest/coverage-v8": "^4.0.4",
-    "eslint": "^9.39.0",
+    "@vitest/coverage-v8": "^4.0.8",
+    "eslint": "^9.39.1",
     "eslint-config-next": "^16.0.0",
     "jsdom": "^27.1.0",
     "tailwindcss": "^4.1.16",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.4"
+    "vitest": "^4.0.8"
   }
 }

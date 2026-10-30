@@ -15,7 +15,7 @@ npm install
 Copy-Item .env.example .env.local
 ```
 
-Set `JWT_SECRET` in `.env.local` to a cryptographically random value of at least 32 characters. Generate a value locally with `node -e "console.info(require('node:crypto').randomBytes(48).toString('base64url'))"`; never commit it. The example uses `http://localhost:3000`, RP ID `localhost`, and `todos.db`. Production requires the actual HTTPS `APP_ORIGIN`, matching domain-only `RP_ID`, and a persistent writable `DATABASE_PATH`.
+Set `JWT_SECRET` in `.env.local` to a cryptographically random value of at least 32 characters. Generate a value locally with `node -e "console.info(require('node:crypto').randomBytes(48).toString('base64url'))"`; never commit it. The example uses `http://localhost:3000`, RP ID `localhost`, and `todos.db`. Production requires the actual HTTPS `RP_ORIGIN`, matching domain-only `RP_ID`, and a persistent writable `DATABASE_PATH`.
 
 ```powershell
 npm run dev
@@ -23,7 +23,7 @@ npm run dev
 
 Open `http://localhost:3000/login` and register with a passkey. Browser notifications require an open app tab and granted site permission. The app checks every 30 seconds; returning to the app also delivers unacknowledged overdue reminders. There is no email, push service, or closed-browser delivery. Delivery across simultaneous tabs is best-effort, not exactly-once.
 
-The initial deployment must use a single Node.js instance: authentication challenge replay tracking and rate limits are process-local. Horizontal scaling requires shared challenge/rate-limit storage. Lost-passkey recovery is not implemented; add another passkey from Passkey settings while you still have access.
+The reminder feature is integrated with the team's authentication and todo foundation, including SQLite-backed single-use challenges and Next.js route protection through `proxy.ts`. Deploy SQLite on persistent storage rather than an ephemeral filesystem. Lost-passkey recovery is not implemented; use the existing Add passkey control while you still have access.
 
 ### Verify this increment
 
@@ -37,7 +37,7 @@ npx playwright install chromium
 npm run test:e2e -- tests\06-reminders.spec.ts
 ```
 
-The E2E runner starts its own server on port 3100, creates a random session secret, uses `.e2e-todos.db` rather than the development database, and registers real virtual passkeys through Chromium DevTools Protocol. Do not run that suite concurrently against the same E2E database. Coverage thresholds apply to the reminder hook and client reminder contract; backend behavior is additionally checked by database/API tests. Test OS notification rendering manually: enable notifications, create a todo due in two minutes with a 15-minute reminder, and confirm one immediate notification and no repeat on the next poll.
+The E2E runner uses port 3100, a test-only session secret, and `.test-todos.db` rather than the development database, and registers real virtual passkeys through Chromium DevTools Protocol. Do not run that suite concurrently against the same test database or reuse a development server with production data. Coverage thresholds in the shared configuration apply to the library source. Test OS notification rendering manually: enable notifications, create a todo due in two minutes with a 15-minute reminder, and confirm one immediate notification and no repeat on the next poll.
 
 Validation status for this increment: production build and TypeScript checks passed. Test files were started before the request to omit test cases and reviews; the complete client/E2E suites and a full coverage run were not executed. The commands above describe available checks, not a claim that those suites passed.
 
@@ -241,11 +241,10 @@ added 345 packages, and audited 346 packages in 45s
 ```
 
 ### Project Structure Verification
-The repository currently contains planning and reference documentation. When scaffolding the application, use this target hierarchy at the repository root. PRPs are kept in the root `PRPs/` directory, not under `.github/`.
+Use this target hierarchy at the repository root when adding features. PRPs are kept in the root `PRPs/` directory, not under `.github/`; the authentication foundation is already implemented.
 
 ```
 todo-app/
-├── AGENT_SYNC.md
 ├── CLAUDE.md
 ├── .github/
 │   └── copilot-instructions.md
@@ -268,7 +267,7 @@ todo-app/
 ├── tests/
 │   ├── helpers.ts
 │   └── *.spec.ts
-├── middleware.ts
+├── proxy.ts
 ├── package.json
 ├── next.config.ts
 ├── playwright.config.ts

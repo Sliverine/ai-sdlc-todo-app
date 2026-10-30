@@ -1,269 +1,520 @@
-"use client";
+'use client'
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import type { FormEvent } from "react";
-import type { Priority, RecurrencePattern, ReminderMinutes, Todo } from "@/lib/db";
-import { requestJson, responseError } from "@/lib/client-api";
-import { useNotifications } from "@/lib/hooks/useNotifications";
-import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from "@/lib/reminders";
-import { formatSingaporeDate, getSingaporeNow, parseSingaporeDate, toSingaporeInput } from "@/lib/timezone";
+import Link from 'next/link'
+import { useEffect, useRef, useState } from 'react'
+import type { FormEvent, KeyboardEvent } from 'react'
+import { AddPasskeyButton } from './AddPasskeyButton'
+import { LogoutButton } from './LogoutButton'
+import type { Priority, RecurrencePattern, Todo } from '@/lib/db'
+import { sectionTodos } from '@/lib/todo-utils'
+import { useNotifications } from '@/lib/hooks/useNotifications'
+import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/reminders'
+import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
 
-type Draft = {
-  title: string;
-  due_date: string;
-  priority: Priority;
-  is_recurring: boolean;
-  recurrence_pattern: RecurrencePattern;
-  reminder_minutes: ReminderMinutes | null;
-};
-const emptyDraft: Draft = {
-  title: "", due_date: "", priority: "medium", is_recurring: false,
-  recurrence_pattern: "daily", reminder_minutes: null,
-};
-const priorities: Priority[] = ["high", "medium", "low"];
-const patterns: RecurrencePattern[] = ["daily", "weekly", "monthly", "yearly"];
-
-function TodoFields({ draft, setDraft, prefix = "" }: {
-  draft: Draft; setDraft: (value: Draft) => void; prefix?: string;
-}) {
-  return <div className="fields">
-    <label>{prefix}Title
-      <input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
-    </label>
-    <label>{prefix}Due date (Singapore time)
-      <input type="datetime-local" value={draft.due_date} onChange={(event) => {
-        const due_date = event.target.value;
-        setDraft({ ...draft, due_date, reminder_minutes: due_date ? draft.reminder_minutes : null });
-      }} />
-    </label>
-    <label>{prefix}Priority
-      <select value={draft.priority} onChange={(event) => {
-        const priority = priorities.find((value) => value === event.target.value);
-        if (priority) setDraft({ ...draft, priority });
-      }}>
-        {priorities.map((value) => <option key={value} value={value}>{value}</option>)}
-      </select>
-    </label>
-    <label>{prefix}Reminder
-      <select value={draft.reminder_minutes ?? ""} disabled={!draft.due_date} onChange={(event) =>
-        setDraft({ ...draft, reminder_minutes: event.target.value === "" ? null : reminderMinutesSchema.parse(Number(event.target.value)) })}>
-        <option value="">None</option>
-        {REMINDER_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
-      </select>
-    </label>
-    <label>{prefix}Repeat
-      <input type="checkbox" checked={draft.is_recurring} onChange={(event) =>
-        setDraft({ ...draft, is_recurring: event.target.checked })} />
-    </label>
-    {draft.is_recurring && <label>{prefix}Recurrence pattern
-      <select value={draft.recurrence_pattern} onChange={(event) => {
-        const recurrence_pattern = patterns.find((value) => value === event.target.value);
-        if (recurrence_pattern) setDraft({ ...draft, recurrence_pattern });
-      }}>
-        {patterns.map((value) => <option key={value}>{value}</option>)}
-      </select>
-    </label>}
-  </div>;
+interface TodoForm {
+  title: string
+  due_date: string
+  priority: Priority
+  is_recurring: boolean
+  recurrence_pattern: RecurrencePattern
+  reminder_minutes: string
 }
 
-function draftPayload(draft: Draft) {
-  if (!draft.title.trim()) throw new Error("Title is required.");
-  if (draft.is_recurring && !draft.due_date) throw new Error("Recurring todos require a due date.");
-  return {
-    ...draft, title: draft.title.trim(),
-    due_date: draft.due_date ? parseSingaporeDate(draft.due_date).toISOString() : null,
-    recurrence_pattern: draft.is_recurring ? draft.recurrence_pattern : null,
-  };
+const emptyForm: TodoForm = {
+  title: '',
+  due_date: '',
+  priority: 'medium',
+  is_recurring: false,
+  recurrence_pattern: 'daily',
+  reminder_minutes: '',
 }
 
-function sorted(todos: Todo[]) {
-  return [...todos].sort((a, b) =>
-    priorities.indexOf(a.priority) - priorities.indexOf(b.priority) ||
-    (a.due_date ? parseSingaporeDate(a.due_date).getTime() : Infinity) -
-      (b.due_date ? parseSingaporeDate(b.due_date).getTime() : Infinity) ||
-    parseSingaporeDate(b.created_at).getTime() - parseSingaporeDate(a.created_at).getTime());
+async function readResponse<T>(response: Response): Promise<T> {
+  const body: unknown = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const message = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+      ? body.error
+      : 'The request could not be completed.'
+    throw new Error(message)
+  }
+  return body as T
 }
 
-export default function TodoPage() {
-  const router = useRouter();
-  const [todos, setTodos] = useState<Todo[]>([]);
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
-  const [editing, setEditing] = useState<Todo | null>(null);
-  const [editDraft, setEditDraft] = useState<Draft>(emptyDraft);
-  const [priorityFilter, setPriorityFilter] = useState("all");
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState<ReadonlySet<number>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  const [signedOut, setSignedOut] = useState(false);
-  const [now, setNow] = useState(() => getSingaporeNow().getTime());
-  const dialog = useRef<HTMLDialogElement>(null);
-  const notifications = useNotifications(!loading && !signedOut);
-
-  const loadTodos = useCallback(async () => {
-    const response = await fetch("/api/todos", { cache: "no-store" });
-    if (response.status === 401) {
-      setSignedOut(true);
-      router.replace("/login");
-      return;
-    }
-    if (!response.ok) throw new Error(await responseError(response));
-    setTodos(await response.json());
-  }, [router]);
+export default function HomePage() {
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [now, setNow] = useState(getSingaporeNow)
+  const [username, setUsername] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [pendingTodoIds, setPendingTodoIds] = useState<number[]>([])
+  const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
+  const [form, setForm] = useState<TodoForm>(emptyForm)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [pageError, setPageError] = useState<string | null>(null)
+  const editDialogRef = useRef<HTMLElement | null>(null)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
+  const focusTodoIdRef = useRef<number | null>(null)
+  const [priorityFilter, setPriorityFilter] = useState('all')
+  const notifications = useNotifications(!loading && !loadFailed)
 
   useEffect(() => {
-    let active = true;
-    void Promise.resolve().then(loadTodos).catch((failure: unknown) => {
-      if (active) setError(failure instanceof Error ? failure.message : "Could not load todos.");
-    }).finally(() => { if (active) setLoading(false); });
-    const timer = setInterval(() => setNow(getSingaporeNow().getTime()), 30_000);
-    return () => { active = false; clearInterval(timer); };
-  }, [loadTodos]);
+    let active = true
+    async function loadWorkspace() {
+      try {
+        const [todoResponse, userResponse] = await Promise.all([
+          fetch('/api/todos', { cache: 'no-store' }),
+          fetch('/api/auth/me', { cache: 'no-store' }),
+        ])
+        const [savedTodos, userData] = await Promise.all([
+          readResponse<Todo[]>(todoResponse),
+          readResponse<{ user: { username: string } }>(userResponse),
+        ])
+        if (active) {
+          setTodos(savedTodos)
+          setUsername(userData.user.username)
+          setLoadFailed(false)
+          setPageError(null)
+        }
+      } catch {
+        if (active) {
+          setLoadFailed(true)
+          setPageError('Your tasks could not be loaded.')
+        }
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
 
-  useEffect(() => { if (editing) dialog.current?.showModal(); }, [editing]);
+    void loadWorkspace()
+    const clock = window.setInterval(() => setNow(getSingaporeNow()), 30_000)
+    return () => {
+      active = false
+      window.clearInterval(clock)
+    }
+  }, [loadAttempt])
 
-  async function createTodo(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    let temporaryId: number | null = null;
+  useEffect(() => {
+    if (!editingTodo) {
+      returnFocusRef.current?.focus()
+      return
+    }
+
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    editDialogRef.current?.querySelector<HTMLInputElement>('.todo-title-field input')?.focus()
+
+    return () => {
+      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
+    }
+  }, [editingTodo])
+
+  useEffect(() => {
+    const todoId = focusTodoIdRef.current
+    if (todoId === null || pendingTodoIds.includes(todoId)) return
+    document.getElementById(`todo-completion-${todoId}`)?.focus()
+    focusTodoIdRef.current = null
+  }, [pendingTodoIds])
+
+  const sections = sectionTodos(todos.filter((todo) => priorityFilter === 'all' || todo.priority === priorityFilter), now)
+
+  function startEditing(todo: Todo) {
+    setEditingTodo(todo)
+    setForm({
+      title: todo.title,
+      due_date: toSingaporeDateTimeInput(todo.due_date),
+      priority: todo.priority,
+      is_recurring: todo.is_recurring,
+      recurrence_pattern: todo.recurrence_pattern ?? 'daily',
+      reminder_minutes: todo.reminder_minutes?.toString() ?? '',
+    })
+    setFormError(null)
+  }
+
+  function cancelEditing() {
+    setEditingTodo(null)
+    setForm(emptyForm)
+    setFormError(null)
+  }
+
+  function buildPayload() {
+    const title = form.title.trim()
+    if (!title) throw new Error('Title is required')
+
+    let dueDate: string | null = null
+    if (form.due_date) {
+      const unchangedDate = editingTodo
+        && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
+      if (unchangedDate) {
+        dueDate = editingTodo.due_date
+      } else {
+        const normalized = normalizeDueDate(form.due_date, now)
+        if (!normalized.valid) throw new Error(normalized.error)
+        dueDate = normalized.value
+      }
+    }
+
+    const reminder = form.reminder_minutes ? reminderMinutesSchema.parse(Number(form.reminder_minutes)) : null
+    if (form.is_recurring && !dueDate) throw new Error('Recurring todos require a due date')
+    if (reminder !== null && !dueDate) throw new Error('Reminders require a due date')
+
+    return {
+      title,
+      completed: editingTodo?.completed ?? false,
+      due_date: dueDate,
+      priority: form.priority,
+      is_recurring: form.is_recurring,
+      recurrence_pattern: form.is_recurring ? form.recurrence_pattern : null,
+      reminder_minutes: reminder,
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (loading || loadFailed) return
+    setFormError(null)
+    setPageError(null)
+    let payload: ReturnType<typeof buildPayload>
     try {
-      const payload = draftPayload(draft);
-      setBusy(true);
-      temporaryId = -getSingaporeNow().getTime();
-      const optimistic: Todo = {
-        ...payload, id: temporaryId, user_id: 0, completed: false,
-        created_at: getSingaporeNow().toISOString(), updated_at: null, last_notification_sent: null,
-      };
-      setTodos((current) => [...current, optimistic]);
-      const created = await requestJson<Todo>("/api/todos", { method: "POST", body: JSON.stringify(payload) });
-      setTodos((current) => current.map((todo) => todo.id === temporaryId ? created : todo));
-      setDraft(emptyDraft);
-    } catch (failure) {
-      if (temporaryId !== null) setTodos((current) => current.filter((todo) => todo.id !== temporaryId));
-      setError(failure instanceof Error ? failure.message : "Could not create todo.");
-    } finally { setBusy(false); }
-  }
+      payload = buildPayload()
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Check the todo details and try again.')
+      return
+    }
 
-  async function updateTodo(todo: Todo, change: Partial<Todo>, remove = false) {
-    setError(null);
-    setPending((current) => new Set([...current, todo.id]));
-    setTodos((current) => remove ? current.filter((item) => item.id !== todo.id)
-      : current.map((item) => item.id === todo.id ? { ...item, ...change } : item));
+    setSaving(true)
+    if (editingTodo) {
+      const original = editingTodo
+      const optimistic = { ...original, ...payload, updated_at: getSingaporeNow().toISOString() }
+      setTodos((current) => current.map((todo) => todo.id === original.id ? optimistic : todo))
+      try {
+        const response = await fetch(`/api/todos/${original.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const saved = await readResponse<Todo>(response)
+        setTodos((current) => current.map((todo) => todo.id === original.id ? saved : todo))
+        cancelEditing()
+      } catch (error) {
+        setTodos((current) => current.map((todo) => todo.id === original.id ? original : todo))
+        setFormError(error instanceof Error ? error.message : 'Could not update this todo. Please try again.')
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
+
+    const optimisticId = -Date.now()
+    const optimistic: Todo = {
+      ...payload,
+      id: optimisticId,
+      user_id: 0,
+      created_at: getSingaporeNow().toISOString(),
+      updated_at: null,
+      last_notification_sent: null,
+      subtasks: [],
+      tags: [],
+    }
+    setTodos((current) => [...current, optimistic])
     try {
-      const response = await requestJson<Todo>(`/api/todos/${todo.id}`, {
-        method: remove ? "DELETE" : "PUT", ...(!remove && { body: JSON.stringify(change) }),
-      });
-      if (!remove) setTodos((current) => current.map((item) => item.id === todo.id ? response : item));
-      if (change.completed && todo.is_recurring) await loadTodos();
-      return true;
-    } catch (failure) {
-      setTodos((current) => remove ? [...current, todo] : current.map((item) => item.id === todo.id ? todo : item));
-      setError(failure instanceof Error ? failure.message : "Could not update todo.");
-      return false;
-    } finally { setPending((current) => new Set([...current].filter((id) => id !== todo.id))); }
+      const response = await fetch('/api/todos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const saved = await readResponse<Todo>(response)
+      setTodos((current) => current.map((todo) => todo.id === optimisticId ? saved : todo))
+      setForm(emptyForm)
+    } catch (error) {
+      setTodos((current) => current.filter((todo) => todo.id !== optimisticId))
+      setFormError(error instanceof Error ? error.message : 'Could not create this todo. Please try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function openEdit(todo: Todo) {
-    setEditDraft({
-      title: todo.title, due_date: toSingaporeInput(todo.due_date), priority: todo.priority,
-      is_recurring: todo.is_recurring, recurrence_pattern: todo.recurrence_pattern ?? "daily",
-      reminder_minutes: todo.reminder_minutes,
-    });
-    setEditing(todo);
-  }
-
-  async function saveEdit(event: FormEvent) {
-    event.preventDefault();
-    if (!editing) return;
+  async function toggleTodo(todo: Todo, completed: boolean) {
+    if (pendingTodoIds.includes(todo.id)) return
+    setPageError(null)
+    const optimistic = { ...todo, completed, updated_at: getSingaporeNow().toISOString() }
+    focusTodoIdRef.current = todo.id
+    setPendingTodoIds((current) => [...current, todo.id])
+    setTodos((current) => current.map((item) => item.id === todo.id ? optimistic : item))
     try {
-      const payload = draftPayload(editDraft);
-      const initialInput = toSingaporeInput(editing.due_date);
-      const change = { ...payload, due_date: editDraft.due_date === initialInput ? editing.due_date : payload.due_date };
-      if (await updateTodo(editing, change)) setEditing(null);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not save todo."); }
+      const response = await fetch(`/api/todos/${todo.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed }),
+      })
+      const saved = await readResponse<Todo>(response)
+      setTodos((current) => current.map((item) => item.id === todo.id ? saved : item))
+      if (completed && todo.is_recurring) {
+        try {
+          const refreshed = await readResponse<Todo[]>(await fetch('/api/todos', { cache: 'no-store' }))
+          setTodos(refreshed)
+        } catch {
+          setPageError('Completion saved, but the next occurrence could not be loaded. Reload to see it.')
+        }
+      }
+    } catch {
+      setTodos((current) => current.map((item) => item.id === todo.id ? todo : item))
+      setPageError('Could not update completion. Please try again.')
+    } finally {
+      setPendingTodoIds((current) => current.filter((id) => id !== todo.id))
+    }
   }
 
-  async function logout() {
+  async function removeTodo(todo: Todo) {
+    setPageError(null)
+    setTodos((current) => current.filter((item) => item.id !== todo.id))
     try {
-      await requestJson("/api/auth/logout", { method: "POST" });
-      setSignedOut(true);
-      router.replace("/login");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not log out."); }
+      const response = await fetch(`/api/todos/${todo.id}`, { method: 'DELETE' })
+      await readResponse<{ success: boolean }>(response)
+    } catch {
+      setTodos((current) => current.some((item) => item.id === todo.id) ? current : [...current, todo])
+      setPageError('Could not delete this todo. Please try again.')
+    }
   }
 
-  const visible = sorted(todos.filter((todo) => priorityFilter === "all" || todo.priority === priorityFilter));
-  const groups = [
-    { title: "Overdue", rows: visible.filter((todo) => !todo.completed && todo.due_date && parseSingaporeDate(todo.due_date).getTime() < now) },
-    { title: "Pending", rows: visible.filter((todo) => !todo.completed && (!todo.due_date || parseSingaporeDate(todo.due_date).getTime() >= now)) },
-    { title: "Completed", rows: visible.filter((todo) => todo.completed) },
-  ];
+  function retryWorkspaceLoad() {
+    setLoadFailed(false)
+    setLoading(true)
+    setPageError(null)
+    setLoadAttempt((current) => current + 1)
+  }
 
-  return <main>
-    <header>
-      <h1>Singapore Todo</h1>
-      <div className="toolbar">
-        <button className={notifications.permission === "granted" ? "enabled" : ""}
-          disabled={!notifications.supported || notifications.permission !== "default"}
-          onClick={() => void notifications.requestPermission()}>
-          {notifications.permission === "granted" ? "Notifications On" : notifications.permission === "denied" ? "Notifications blocked" : "Enable Notifications"}
-        </button>
-        <Link href="/login">Passkey settings</Link>
-        <button className="secondary" onClick={() => void logout()}>Logout</button>
-      </div>
-    </header>
-    <p className="muted">All dates use Singapore time. Keep this app open for browser reminders; overdue reminders are delivered when you return.</p>
-    {!notifications.supported && !loading && <p>Desktop notifications are unavailable in this browser.</p>}
-    {notifications.permission === "denied" && <p>Allow notifications in your browser site settings, then reload this page.</p>}
-    {(error || notifications.error) && <div role="alert" className="error">{error || notifications.error}</div>}
-    <form onSubmit={(event) => void createTodo(event)} aria-label="Create todo">
-      <TodoFields draft={draft} setDraft={setDraft} />
-      <button disabled={loading || busy || !draft.title.trim()} type="submit">{busy ? "Adding..." : "Add todo"}</button>
-    </form>
-    <label>Filter by priority
-      <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
-        <option value="all">All priorities</option>
-        {priorities.map((value) => <option key={value}>{value}</option>)}
-      </select>
-    </label>
-    {loading && <p role="status">Loading todos...</p>}
-    {!loading && !error && todos.length === 0 && <p>You have no todos yet.</p>}
-    {groups.filter((group) => group.rows.length).map((group) => <section key={group.title} aria-label={group.title}>
-      <h2>{group.title} ({group.rows.length})</h2>
-      {group.rows.map((todo) => <article key={todo.id} data-testid={`todo-${todo.id}`}>
-        <div className="todo-heading">
-          <label className={`todo-title ${todo.completed ? "completed" : ""}`}>
-            <input type="checkbox" checked={todo.completed} disabled={pending.has(todo.id) || todo.id < 0}
-              onChange={() => void updateTodo(todo, { completed: !todo.completed })} />
-            {todo.title}
+  function containDialogFocus(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape') {
+      cancelEditing()
+      return
+    }
+    if (event.key !== 'Tab') return
+
+    const focusable = editDialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]',
+    )
+    const first = focusable?.item(0)
+    const last = focusable?.item((focusable.length ?? 1) - 1)
+    if (!first || !last) {
+      event.preventDefault()
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  function renderTodoForm() {
+    return (
+      <form className="todo-create-form" onSubmit={(event) => void handleSubmit(event)}>
+        <div className="todo-form-heading">
+          <h2>{editingTodo ? 'Edit todo' : 'Add a todo'}</h2>
+          {editingTodo && <button className="quiet-button" type="button" onClick={cancelEditing}>Cancel</button>}
+        </div>
+        <label className="todo-field todo-title-field">
+          <span>Task</span>
+          <input
+            autoComplete="off"
+            onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+            placeholder="What needs your attention?"
+            value={form.title}
+          />
+        </label>
+        <div className="todo-form-grid">
+          <label className="todo-field">
+            <span>Due date and time (Singapore)</span>
+            <input
+              onChange={(event) => setForm((current) => ({
+                ...current,
+                due_date: event.target.value,
+                reminder_minutes: event.target.value ? current.reminder_minutes : '',
+              }))}
+              type="datetime-local"
+              value={form.due_date}
+            />
           </label>
-          <div className="toolbar">
-            <button className="secondary" disabled={pending.has(todo.id) || todo.id < 0} onClick={() => openEdit(todo)}>Edit</button>
-            <button className="danger" disabled={pending.has(todo.id) || todo.id < 0} onClick={() => void updateTodo(todo, {}, true)}>Delete</button>
-          </div>
+          <label className="todo-field">
+            <span>Priority</span>
+            <select onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value as Priority }))} value={form.priority}>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <label className="todo-field">
+            <span>Reminder</span>
+            <select
+              disabled={!form.due_date}
+              onChange={(event) => setForm((current) => ({ ...current, reminder_minutes: event.target.value }))}
+              value={form.reminder_minutes}
+            >
+              <option value="">None</option>
+              {REMINDER_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
+            </select>
+          </label>
         </div>
-        <div className="badges">
-          <span className={`badge ${todo.priority}`}>{todo.priority}</span>
-          {todo.reminder_minutes !== null && <span className="badge" aria-label={`Reminder ${reminderLabel(todo.reminder_minutes)}`}>
-            &#128276; {reminderLabel(todo.reminder_minutes)}
-          </span>}
-          {todo.is_recurring && <span className="badge">&#128260; {todo.recurrence_pattern}</span>}
+        <div className="todo-form-footer">
+          <label className="recurring-control">
+            <input
+              checked={form.is_recurring}
+              onChange={(event) => setForm((current) => ({ ...current, is_recurring: event.target.checked }))}
+              type="checkbox"
+            />
+            <span>Repeat this todo</span>
+          </label>
+          {form.is_recurring && (
+            <label className="todo-field recurrence-select">
+              <span>Repeat</span>
+              <select
+                onChange={(event) => setForm((current) => ({ ...current, recurrence_pattern: event.target.value as RecurrencePattern }))}
+                value={form.recurrence_pattern}
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </label>
+          )}
+          <button className="primary-button todo-submit" disabled={saving || loading || loadFailed} type="submit">
+            {loadFailed ? 'Tasks unavailable' : loading ? 'Loading tasks...' : saving ? 'Saving...' : editingTodo ? 'Save changes' : 'Add todo'}
+          </button>
         </div>
-        {todo.due_date && <p className="muted">Due {formatSingaporeDate(todo.due_date)}</p>}
-      </article>)}
-    </section>)}
-    {editing && <dialog ref={dialog} onCancel={() => setEditing(null)}
-      onClick={(event) => { if (event.target === event.currentTarget) setEditing(null); }}>
-      <form aria-label="Edit todo" onSubmit={(event) => void saveEdit(event)}>
-        <h2>Edit todo</h2>
-        <TodoFields draft={editDraft} setDraft={setEditDraft} prefix="Edit " />
-        {error && <p role="alert">{error}</p>}
-        <div className="toolbar">
-          <button type="submit" disabled={pending.has(editing.id)}>Update todo</button>
-          <button className="secondary" type="button" onClick={() => setEditing(null)}>Cancel</button>
-        </div>
+        {formError && <p className="todo-error" role="alert">{formError}</p>}
       </form>
-    </dialog>}
-  </main>;
+    )
+  }
+
+  function renderSection(title: string, items: Todo[], className: string) {
+    return (
+      <section className={`todo-section ${className}`} aria-labelledby={`${className}-title`}>
+        <div className="todo-section-heading">
+          <h2 id={`${className}-title`}>{title}</h2>
+          <span>{items.length}</span>
+        </div>
+        {items.length > 0 ? (
+          <ul className="todo-list">
+            {items.map((todo) => (
+              <li className="todo-row" key={todo.id}>
+                <input
+                  id={`todo-completion-${todo.id}`}
+                  aria-label={`Mark ${todo.title} ${todo.completed ? 'incomplete' : 'complete'}`}
+                  checked={todo.completed}
+                  disabled={pendingTodoIds.includes(todo.id)}
+                  onChange={(event) => void toggleTodo(todo, event.target.checked)}
+                  type="checkbox"
+                />
+                <div className="todo-copy">
+                  <p className={todo.completed ? 'todo-title is-complete' : 'todo-title'}>{todo.title}</p>
+                  <div className="todo-metadata">
+                    <span className={`priority-label priority-${todo.priority}`}>{todo.priority}</span>
+                    {todo.due_date && <span>{formatSingaporeDate(todo.due_date)}</span>}
+                    {todo.is_recurring && todo.recurrence_pattern && <span>Repeats {todo.recurrence_pattern}</span>}
+                    {todo.reminder_minutes !== null && <span className="reminder-badge" aria-label={`Reminder ${reminderLabel(todo.reminder_minutes)}`}>
+                      &#128276; {reminderLabel(todo.reminder_minutes)}
+                    </span>}
+                    {todo.tags?.map((tag) => <span className="todo-tag" key={tag.id}>{tag.name}</span>)}
+                  </div>
+                  {todo.subtasks && todo.subtasks.length > 0 && (
+                    <p className="todo-subtask-count">
+                      {todo.subtasks.filter((subtask) => subtask.completed).length}/{todo.subtasks.length} subtasks
+                    </p>
+                  )}
+                </div>
+                <div className="todo-actions">
+                  <button disabled={pendingTodoIds.includes(todo.id)} type="button" onClick={() => startEditing(todo)}>Edit</button>
+                  <button className="delete-action" disabled={pendingTodoIds.includes(todo.id)} type="button" onClick={() => void removeTodo(todo)}>Delete</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="section-empty">Nothing here.</p>}
+      </section>
+    )
+  }
+
+  return (
+    <main className="workspace-shell">
+      <header className="workspace-header">
+        <Link className="wordmark" href="/">Daymark</Link>
+        <nav className="workspace-nav" aria-label="Workspace">
+          <button className={`quiet-button notification-toggle ${notifications.permission === 'granted' ? 'notification-enabled' : ''}`}
+            disabled={!notifications.supported || notifications.permission !== 'default'}
+            onClick={() => void notifications.requestPermission()} type="button">
+            {notifications.permission === 'granted' ? 'Notifications On'
+              : notifications.permission === 'denied' ? 'Notifications blocked' : 'Enable Notifications'}
+          </button>
+          <Link className="text-link" href="/calendar">Calendar</Link>
+          {username && <AddPasskeyButton username={username} />}
+          <LogoutButton />
+        </nav>
+      </header>
+      <div className="todo-workspace">
+        <section className="todo-intro" aria-labelledby="todo-heading">
+          <p className="eyebrow">Personal workspace{username ? ` / ${username}` : ''}</p>
+          <div className="todo-title-row">
+            <div>
+              <h1 id="todo-heading">Today, in focus.</h1>
+              <p className="workspace-note">{todos.length} {todos.length === 1 ? 'task' : 'tasks'} across your list</p>
+            </div>
+            <p className="todo-current-date">{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', dateStyle: 'full' }).format(now)}</p>
+          </div>
+        </section>
+        <p className="workspace-note">All dates use Singapore time. Keep this app open for browser reminders; overdue reminders are delivered when you return.</p>
+        {!notifications.supported && !loading && <p className="workspace-note">Desktop notifications are unavailable in this browser.</p>}
+        {notifications.permission === 'denied' && <p className="workspace-note">Allow notifications in browser site settings, then reload this page.</p>}
+        {notifications.error && <p className="todo-page-error" role="alert">{notifications.error}</p>}
+
+        {!editingTodo && renderTodoForm()}
+        <div className="todo-list-heading">
+          <h2>Your tasks</h2>
+          <span>{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit' }).format(now)} SGT</span>
+        </div>
+        <label className="todo-field">
+          <span>Filter by priority</span>
+          <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
+            <option value="all">All priorities</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        {pageError && <p className="todo-page-error" role="alert">{pageError}</p>}
+        {loadFailed && <button className="quiet-button retry-load-button" onClick={retryWorkspaceLoad} type="button">Retry loading tasks</button>}
+        {loading ? <p className="loading-state" role="status">Loading your tasks...</p> : !loadFailed && (
+          <div className="todo-sections">
+            {renderSection('Overdue', sections.overdue, 'overdue-section')}
+            {renderSection('Pending', sections.pending, 'pending-section')}
+            {renderSection('Completed', sections.completed, 'completed-section')}
+          </div>
+        )}
+      </div>
+
+      {editingTodo && (
+        <div
+          className="todo-dialog-backdrop"
+          onClick={(event) => { if (event.target === event.currentTarget) cancelEditing() }}
+        >
+          <section
+            ref={editDialogRef}
+            aria-labelledby="edit-dialog-title"
+            aria-modal="true"
+            className="todo-edit-dialog"
+            onKeyDown={containDialogFocus}
+            role="dialog"
+            tabIndex={-1}
+          >
+            <div className="todo-dialog-heading">
+              <h2 id="edit-dialog-title">Edit todo</h2>
+              <button aria-label="Close edit dialog" className="dialog-close" onClick={cancelEditing} type="button">×</button>
+            </div>
+            {renderTodoForm()}
+          </section>
+        </div>
+      )}
+    </main>
+  )
 }
