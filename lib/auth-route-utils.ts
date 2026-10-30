@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { z } from 'zod'
+import { readLimitedJson } from './request-utils'
 
 export const usernameSchema = z.string()
   .trim()
@@ -10,12 +11,10 @@ export const usernameSchema = z.string()
 export const challengeSchema = z.string().min(1).max(256)
 
 export async function readValidatedJson<T extends z.ZodType>(request: NextRequest, schema: T): Promise<z.infer<T> | null> {
-  try {
-    const result = schema.safeParse(await request.json())
-    return result.success ? result.data : null
-  } catch {
-    return null
-  }
+  const body = await readLimitedJson(request)
+  if (!body.ok) return null
+  const result = schema.safeParse(body.value)
+  return result.success ? result.data : null
 }
 
 export function isSameOriginRequest(request: NextRequest): boolean {

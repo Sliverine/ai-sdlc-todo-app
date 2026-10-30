@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { getSingaporeNow } from './timezone'
+import { getSingaporeNow, parseDueDate } from './timezone'
 import { TodoValidationError } from './todo-errors'
 import { calculateNextDueDate } from './recurrence'
 
@@ -224,6 +224,14 @@ const schema = `
     expires_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_auth_challenges_expires_at ON auth_challenges(expires_at);
+
+  CREATE TABLE IF NOT EXISTS auth_rate_limits (
+    bucket_key TEXT PRIMARY KEY,
+    window_start INTEGER NOT NULL,
+    request_count INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_expires_at ON auth_rate_limits(expires_at);
 `
 
 export function createDatabase(filePath: string): Database.Database {
@@ -244,6 +252,7 @@ export function createDatabase(filePath: string): Database.Database {
     SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', updated_at)
     WHERE updated_at IS NOT NULL AND updated_at NOT LIKE '%Z'
   `).run()
+  migrateLegacyDueDates(database)
   const usersWithoutHandle = database.prepare('SELECT id FROM users WHERE webauthn_user_id IS NULL').all() as Array<{ id: number }>
   const updateUserHandle = database.prepare('UPDATE users SET webauthn_user_id = ? WHERE id = ?')
   for (const user of usersWithoutHandle) {
@@ -258,6 +267,27 @@ function ensureColumn(database: Database.Database, table: string, column: string
   if (!columns.some((entry) => entry.name === column)) {
     database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
   }
+}
+
+function migrateLegacyDueDates(database: Database.Database): void {
+  const migrate = database.transaction(() => {
+    const rows = database.prepare('SELECT id, due_date FROM todos WHERE due_date IS NOT NULL').all() as Array<{ id: number; due_date: string }>
+    const updateDueDate = database.prepare('UPDATE todos SET due_date = ? WHERE id = ?')
+
+    for (const row of rows) {
+      const value = row.due_date.trim()
+      const localInput = /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? `${value}T00:00`
+        : value.replace(/^(\d{4}-\d{2}-\d{2})\s+/, '$1T')
+      const parsed = parseDueDate(localInput)
+      if (!parsed.valid) {
+        throw new Error('Unable to migrate a legacy todo due date')
+      }
+      if (parsed.value !== row.due_date) updateDueDate.run(parsed.value, row.id)
+    }
+  })
+
+  migrate()
 }
 
 interface TodoRow extends Omit<Todo, 'completed' | 'is_recurring'> {
@@ -610,3 +640,60 @@ export function createAuthChallengeDB(database: Database.Database) {
 }
 
 export const authChallengeDB = createAuthChallengeDB(db)
+
+export interface AuthRateLimitDecision {
+  allowed: boolean
+  retryAfterSeconds: number
+}
+
+interface AuthRateLimitRow {
+  window_start: number
+  request_count: number
+  expires_at: number
+}
+
+export function createAuthRateLimitDB(database: Database.Database) {
+  const deleteExpired = database.prepare('DELETE FROM auth_rate_limits WHERE expires_at <= ?')
+  const selectBucket = database.prepare('SELECT window_start, request_count, expires_at FROM auth_rate_limits WHERE bucket_key = ?')
+  const insertBucket = database.prepare(`
+    INSERT INTO auth_rate_limits (bucket_key, window_start, request_count, expires_at)
+    VALUES (?, ?, 1, ?)
+    ON CONFLICT(bucket_key) DO UPDATE SET
+      window_start = excluded.window_start,
+      request_count = 1,
+      expires_at = excluded.expires_at
+  `)
+  const incrementBucket = database.prepare(`
+    UPDATE auth_rate_limits SET request_count = request_count + 1 WHERE bucket_key = ?
+  `)
+  const consumeTransaction = database.transaction((
+    bucketKey: string,
+    now: number,
+    windowMs: number,
+    maximumRequests: number,
+  ): AuthRateLimitDecision => {
+    deleteExpired.run(now)
+    const windowStart = Math.floor(now / windowMs) * windowMs
+    const expiresAt = windowStart + windowMs
+    const current = selectBucket.get(bucketKey) as AuthRateLimitRow | undefined
+
+    if (!current || current.window_start !== windowStart) {
+      insertBucket.run(bucketKey, windowStart, expiresAt)
+      return { allowed: true, retryAfterSeconds: 0 }
+    }
+    if (current.request_count >= maximumRequests) {
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((expiresAt - now) / 1000)) }
+    }
+
+    incrementBucket.run(bucketKey)
+    return { allowed: true, retryAfterSeconds: 0 }
+  })
+
+  return {
+    consume(bucketKey: string, now: number, windowMs: number, maximumRequests: number): AuthRateLimitDecision {
+      return consumeTransaction.immediate(bucketKey, now, windowMs, maximumRequests)
+    },
+  }
+}
+
+export const authRateLimitDB = createAuthRateLimitDB(db)

@@ -1,6 +1,7 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSession, getSession } from '@/lib/auth'
+import { checkAuthClientRateLimit, checkAuthUsernameRateLimit } from '@/lib/auth-rate-limit'
 import { challengeSchema, getWebAuthnConfig, isSameOriginRequest, isSqliteConstraintError, readValidatedJson, usernameSchema } from '@/lib/auth-route-utils'
 import { authChallengeDB, authDataDB, authenticatorDB, userDB } from '@/lib/db'
 import type { User } from '@/lib/db'
@@ -18,9 +19,13 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 })
   }
+  const clientRateLimit = checkAuthClientRateLimit(request, 'registration')
+  if (clientRateLimit) return clientRateLimit
 
   const body = await readValidatedJson(request, bodySchema)
   if (!body) return NextResponse.json({ error: 'Invalid registration response' }, { status: 400 })
+  const usernameRateLimit = checkAuthUsernameRateLimit('registration', body.username)
+  if (usernameRateLimit) return usernameRateLimit
 
   const challenge = authChallengeDB.consume(body.challenge, 'registration', Date.now(), body.username)
   if (!challenge) return NextResponse.json({ error: 'Registration challenge expired or invalid' }, { status: 401 })

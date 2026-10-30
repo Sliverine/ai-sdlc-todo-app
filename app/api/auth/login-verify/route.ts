@@ -1,6 +1,7 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSession } from '@/lib/auth'
+import { checkAuthClientRateLimit, checkAuthUsernameRateLimit } from '@/lib/auth-rate-limit'
 import { getWebAuthnConfig, isSameOriginRequest, readValidatedJson, usernameSchema, challengeSchema } from '@/lib/auth-route-utils'
 import { authChallengeDB, authenticatorDB, userDB } from '@/lib/db'
 import { isCounterValid } from '@/lib/webauthn-policy'
@@ -19,9 +20,13 @@ export async function POST(request: NextRequest) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: 'Invalid request origin' }, { status: 403 })
   }
+  const clientRateLimit = checkAuthClientRateLimit(request, 'login')
+  if (clientRateLimit) return clientRateLimit
 
   const body = await readValidatedJson(request, bodySchema)
   if (!body) return NextResponse.json(genericLoginError, { status: 401 })
+  const usernameRateLimit = checkAuthUsernameRateLimit('login', body.username)
+  if (usernameRateLimit) return usernameRateLimit
 
   const challenge = authChallengeDB.consume(body.challenge, 'login', Date.now(), body.username)
   if (!challenge || challenge.userId === null) {
