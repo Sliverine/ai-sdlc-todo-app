@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
@@ -12,32 +12,32 @@ import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/re
 import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
 
 interface TodoForm {
-  title: string
-  due_date: string
-  priority: Priority
-  is_recurring: boolean
-  recurrence_pattern: RecurrencePattern
-  reminder_minutes: string
+	title: string
+	due_date: string
+	priority: Priority
+	is_recurring: boolean
+	recurrence_pattern: RecurrencePattern
+	reminder_minutes: string
 }
 
 const emptyForm: TodoForm = {
-  title: '',
-  due_date: '',
-  priority: 'medium',
-  is_recurring: false,
-  recurrence_pattern: 'daily',
-  reminder_minutes: '',
+	title: '',
+	due_date: '',
+	priority: 'medium',
+	is_recurring: false,
+	recurrence_pattern: 'daily',
+	reminder_minutes: '',
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
-  const body: unknown = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const message = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
-      ? body.error
-      : 'The request could not be completed.'
-    throw new Error(message)
-  }
-  return body as T
+	const body: unknown = await response.json().catch(() => ({}))
+	if (!response.ok) {
+		const message = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+			? body.error
+			: 'The request could not be completed.'
+		throw new Error(message)
+	}
+	return body as T
 }
 
 export default function HomePage() {
@@ -59,183 +59,189 @@ export default function HomePage() {
   const editDialogRef = useRef<HTMLElement | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const focusTodoIdRef = useRef<number | null>(null)
-  const [priorityFilter, setPriorityFilter] = useState('all')
+  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all')
   const notifications = useNotifications(!loading && !loadFailed)
 
-  useEffect(() => {
-    let active = true
-    async function loadWorkspace() {
-      try {
-        const [todoResponse, userResponse] = await Promise.all([
-          fetch('/api/todos', { cache: 'no-store' }),
-          fetch('/api/auth/me', { cache: 'no-store' }),
-        ])
-        const [savedTodos, userData] = await Promise.all([
+	useEffect(() => {
+		let active = true
+		async function loadWorkspace() {
+			try {
+				const [todoResponse, userResponse] = await Promise.all([
+					fetch('/api/todos', { cache: 'no-store' }),
+					fetch('/api/auth/me', { cache: 'no-store' }),
+				])
+				const [savedTodos, userData] = await Promise.all([
           readResponse<Todo[]>(todoResponse),
-          readResponse<{ user: { username: string } }>(userResponse),
-        ])
+					readResponse<{ user: { username: string } }>(userResponse),
+				])
         if (active) {
           setTodos(savedTodos)
-          setUsername(userData.user.username)
-          setLoadFailed(false)
-          setPageError(null)
-        }
-      } catch {
-        if (active) {
-          setLoadFailed(true)
-          setPageError('Your tasks could not be loaded.')
-        }
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
+					setLoadFailed(false)
+					setPageError(null)
+				}
+			} catch {
+				if (active) {
+					setLoadFailed(true)
+					setPageError('Your tasks could not be loaded.')
+				}
+			} finally {
+				if (active) setLoading(false)
+			}
+		}
 
-    void loadWorkspace()
-    const clock = window.setInterval(() => setNow(getSingaporeNow()), 30_000)
-    return () => {
-      active = false
-      window.clearInterval(clock)
-    }
-  }, [loadAttempt])
+		void loadWorkspace()
+		const clock = window.setInterval(() => setNow(getSingaporeNow()), 30_000)
+		return () => {
+			active = false
+			window.clearInterval(clock)
+		}
+	}, [loadAttempt])
 
-  useEffect(() => {
-    if (!editingTodo) {
-      returnFocusRef.current?.focus()
-      return
-    }
+	useEffect(() => {
+		if (!editingTodo) {
+			returnFocusRef.current?.focus()
+			return
+		}
+		returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+		editDialogRef.current?.querySelector<HTMLInputElement>('.todo-title-field input')?.focus()
+		return () => {
+			if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
+		}
+	}, [editingTodo])
 
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    editDialogRef.current?.querySelector<HTMLInputElement>('.todo-title-field input')?.focus()
+	useEffect(() => {
+		const todoId = focusTodoIdRef.current
+		if (todoId === null || pendingTodoIds.includes(todoId)) return
+		document.getElementById(`todo-completion-${todoId}`)?.focus()
+		focusTodoIdRef.current = null
+	}, [pendingTodoIds])
 
-    return () => {
-      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
-    }
-  }, [editingTodo])
-
-  useEffect(() => {
-    const todoId = focusTodoIdRef.current
-    if (todoId === null || pendingTodoIds.includes(todoId)) return
-    document.getElementById(`todo-completion-${todoId}`)?.focus()
-    focusTodoIdRef.current = null
-  }, [pendingTodoIds])
+	function startEditing(todo: Todo) {
+		setEditingTodo(todo)
+		setForm({
+			title: todo.title,
+			due_date: toSingaporeDateTimeInput(todo.due_date),
+			priority: todo.priority,
+			is_recurring: todo.is_recurring,
+			recurrence_pattern: todo.recurrence_pattern ?? 'daily',
+			reminder_minutes: todo.reminder_minutes?.toString() ?? '',
+		})
+		setFormError(null)
+	}
 
   const sections = sectionTodos(todos.filter((todo) => priorityFilter === 'all' || todo.priority === priorityFilter), now)
+	function cancelEditing() {
+		setEditingTodo(null)
+		setForm(emptyForm)
+		setFormError(null)
+	}
 
-  function startEditing(todo: Todo) {
-    setEditingTodo(todo)
-    setForm({
-      title: todo.title,
-      due_date: toSingaporeDateTimeInput(todo.due_date),
-      priority: todo.priority,
-      is_recurring: todo.is_recurring,
-      recurrence_pattern: todo.recurrence_pattern ?? 'daily',
-      reminder_minutes: todo.reminder_minutes?.toString() ?? '',
-    })
-    setFormError(null)
-  }
+	function buildPayload() {
+		const title = form.title.trim()
+		if (!title) throw new Error('Title is required')
 
-  function cancelEditing() {
-    setEditingTodo(null)
-    setForm(emptyForm)
-    setFormError(null)
-  }
-
-  function buildPayload() {
-    const title = form.title.trim()
-    if (!title) throw new Error('Title is required')
-
-    let dueDate: string | null = null
-    if (form.due_date) {
-      const unchangedDate = editingTodo
-        && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
-      if (unchangedDate) {
-        dueDate = editingTodo.due_date
-      } else {
-        const normalized = normalizeDueDate(form.due_date, now)
-        if (!normalized.valid) throw new Error(normalized.error)
-        dueDate = normalized.value
-      }
-    }
+		let dueDate: string | null = null
+		if (form.due_date) {
+			const unchangedDate = editingTodo && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
+			if (unchangedDate) {
+				dueDate = editingTodo.due_date
+			} else {
+				const normalized = normalizeDueDate(form.due_date, now)
+				if (!normalized.valid) throw new Error(normalized.error)
+				dueDate = normalized.value
+			}
+		}
 
     const reminder = form.reminder_minutes ? reminderMinutesSchema.parse(Number(form.reminder_minutes)) : null
-    if (form.is_recurring && !dueDate) throw new Error('Recurring todos require a due date')
-    if (reminder !== null && !dueDate) throw new Error('Reminders require a due date')
+		if (form.is_recurring && !dueDate) throw new Error('Recurring todos require a due date')
+		if (reminder !== null && !dueDate) throw new Error('Reminders require a due date')
+		return {
+			title,
+			completed: editingTodo?.completed ?? false,
+			due_date: dueDate,
+			priority: form.priority,
+			is_recurring: form.is_recurring,
+			recurrence_pattern: form.is_recurring ? form.recurrence_pattern : null,
+			reminder_minutes: reminder,
+		}
+	}
 
-    return {
-      title,
-      completed: editingTodo?.completed ?? false,
-      due_date: dueDate,
-      priority: form.priority,
-      is_recurring: form.is_recurring,
-      recurrence_pattern: form.is_recurring ? form.recurrence_pattern : null,
-      reminder_minutes: reminder,
-    }
-  }
+	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault()
+		if (loading || loadFailed) return
+		setFormError(null)
+		setPageError(null)
+		let payload: ReturnType<typeof buildPayload>
+		try {
+			payload = buildPayload()
+		} catch (error) {
+			setFormError(error instanceof Error ? error.message : 'Check the todo details and try again.')
+			return
+		}
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (loading || loadFailed) return
-    setFormError(null)
-    setPageError(null)
-    let payload: ReturnType<typeof buildPayload>
-    try {
-      payload = buildPayload()
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Check the todo details and try again.')
-      return
-    }
+		setSaving(true)
+		if (editingTodo) {
+			const original = editingTodo
+			const optimistic = { ...original, ...payload, updated_at: getSingaporeNow().toISOString() }
+			setTodos((current) => current.map((todo) => todo.id === original.id ? optimistic : todo))
+			try {
+				const response = await fetch(`/api/todos/${original.id}`, {
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(payload),
+				})
+				const saved = await readResponse<Todo>(response)
+				setTodos((current) => current.map((todo) => todo.id === original.id ? saved : todo))
+				cancelEditing()
+			} catch (error) {
+				setTodos((current) => current.map((todo) => todo.id === original.id ? original : todo))
+				setFormError(error instanceof Error ? error.message : 'Could not update this todo. Please try again.')
+			} finally {
+				setSaving(false)
+			}
+			return
+		}
 
-    setSaving(true)
-    if (editingTodo) {
-      const original = editingTodo
-      const optimistic = { ...original, ...payload, updated_at: getSingaporeNow().toISOString() }
-      setTodos((current) => current.map((todo) => todo.id === original.id ? optimistic : todo))
-      try {
-        const response = await fetch(`/api/todos/${original.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        const saved = await readResponse<Todo>(response)
-        setTodos((current) => current.map((todo) => todo.id === original.id ? saved : todo))
-        cancelEditing()
-      } catch (error) {
-        setTodos((current) => current.map((todo) => todo.id === original.id ? original : todo))
-        setFormError(error instanceof Error ? error.message : 'Could not update this todo. Please try again.')
-      } finally {
-        setSaving(false)
-      }
-      return
-    }
+		const optimisticId = -Date.now()
+		const optimistic: Todo = {
+			...payload,
+			id: optimisticId,
+			user_id: 0,
+			created_at: getSingaporeNow().toISOString(),
+			updated_at: null,
+			last_notification_sent: null,
+			subtasks: [],
+			tags: [],
+		}
+		setTodos((current) => [...current, optimistic])
+		try {
+			const response = await fetch('/api/todos', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload),
+			})
+			const saved = await readResponse<Todo>(response)
+			setTodos((current) => current.map((todo) => todo.id === optimisticId ? saved : todo))
+			setForm(emptyForm)
+		} catch (error) {
+			setTodos((current) => current.filter((todo) => todo.id !== optimisticId))
+			setFormError(error instanceof Error ? error.message : 'Could not create this todo. Please try again.')
+		} finally {
+			setSaving(false)
+		}
+	}
 
-    const optimisticId = -Date.now()
-    const optimistic: Todo = {
-      ...payload,
-      id: optimisticId,
-      user_id: 0,
-      created_at: getSingaporeNow().toISOString(),
-      updated_at: null,
-      last_notification_sent: null,
-      subtasks: [],
-      tags: [],
-    }
-    setTodos((current) => [...current, optimistic])
-    try {
-      const response = await fetch('/api/todos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const saved = await readResponse<Todo>(response)
-      setTodos((current) => current.map((todo) => todo.id === optimisticId ? saved : todo))
-      setForm(emptyForm)
-    } catch (error) {
-      setTodos((current) => current.filter((todo) => todo.id !== optimisticId))
-      setFormError(error instanceof Error ? error.message : 'Could not create this todo. Please try again.')
-    } finally {
-      setSaving(false)
-    }
-  }
+	async function removeTodo(todo: Todo) {
+		setPageError(null)
+		setTodos((current) => current.filter((item) => item.id !== todo.id))
+		try {
+			const response = await fetch(`/api/todos/${todo.id}`, { method: 'DELETE' })
+			await readResponse<{ success: boolean }>(response)
+		} catch {
+			setTodos((current) => current.some((item) => item.id === todo.id) ? current : [...current, todo])
+			setPageError('Could not delete this todo. Please try again.')
+		}
+	}
 
   async function toggleTodo(todo: Todo, completed: boolean) {
     if (pendingTodoIds.includes(todo.id)) return
@@ -265,18 +271,6 @@ export default function HomePage() {
       setPageError('Could not update completion. Please try again.')
     } finally {
       setPendingTodoIds((current) => current.filter((id) => id !== todo.id))
-    }
-  }
-
-  async function removeTodo(todo: Todo) {
-    setPageError(null)
-    setTodos((current) => current.filter((item) => item.id !== todo.id))
-    try {
-      const response = await fetch(`/api/todos/${todo.id}`, { method: 'DELETE' })
-      await readResponse<{ success: boolean }>(response)
-    } catch {
-      setTodos((current) => current.some((item) => item.id === todo.id) ? current : [...current, todo])
-      setPageError('Could not delete this todo. Please try again.')
     }
   }
 
@@ -508,7 +502,9 @@ export default function HomePage() {
                 <div className="todo-copy">
                   <p className={todo.completed ? 'todo-title is-complete' : 'todo-title'}>{todo.title}</p>
                   <div className="todo-metadata">
-                    <span className={`priority-label priority-${todo.priority}`}>{todo.priority}</span>
+                    <span aria-label={`${todo.priority} priority`} className={`priority-badge priority-badge-${todo.priority}`}>
+                      {todo.priority[0].toUpperCase() + todo.priority.slice(1)}
+                    </span>
                     {todo.due_date && <span>{formatSingaporeDate(todo.due_date)}</span>}
                     {todo.is_recurring && todo.recurrence_pattern && <span>Repeats {todo.recurrence_pattern}</span>}
                     {todo.reminder_minutes !== null && <span className="reminder-badge" aria-label={`Reminder ${reminderLabel(todo.reminder_minutes)}`}>
@@ -650,9 +646,9 @@ export default function HomePage() {
           <h2>Your tasks</h2>
           <span>{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit' }).format(now)} SGT</span>
         </div>
-        <label className="todo-field">
+        <label className="todo-field priority-filter">
           <span>Filter by priority</span>
-          <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
+          <select aria-label="Filter by priority" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as Priority | 'all')}>
             <option value="all">All priorities</option>
             <option value="high">High</option>
             <option value="medium">Medium</option>

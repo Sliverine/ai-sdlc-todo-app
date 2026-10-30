@@ -1,9 +1,37 @@
 import { describe, expect, it } from 'vitest'
-import type { Todo } from '../lib/db'
-import { calculateProgress, sectionTodos, sortTodos } from '../lib/todo-utils'
+import { PRIORITY_ORDER, PRIORITY_VALUES, type Todo } from '../lib/db'
+import { calculateProgress, sectionTodos, sortTodos, validatePriority } from '../lib/todo-utils'
 import { formatSingaporeDate, normalizeDueDate, parseDueDate, toSingaporeDateTimeInput } from '../lib/timezone'
 
 const now = new Date('2026-10-30T00:00:00.000Z')
+
+describe('priority contract', () => {
+  it('exports the canonical priority values and ordering', () => {
+    expect(PRIORITY_VALUES).toEqual(['high', 'medium', 'low'])
+    expect(PRIORITY_ORDER).toEqual({ high: 0, medium: 1, low: 2 })
+  })
+
+  it('defaults omitted and null create priorities to medium', () => {
+    expect(validatePriority(undefined)).toBe('medium')
+    expect(validatePriority(null)).toBe('medium')
+  })
+
+  it.each(['high', 'medium', 'low'] as const)('accepts %s priority', (priority) => {
+    expect(validatePriority(priority)).toBe(priority)
+  })
+
+  it.each(['urgent', 'HIGH', ''])('rejects invalid priority %j with a descriptive error', (priority) => {
+    expect(() => validatePriority(priority)).toThrow(
+      `Invalid priority: ${priority}. Must be 'high', 'medium', or 'low'.`,
+    )
+  })
+
+  it('rejects null priority when validating an update', () => {
+    expect(() => validatePriority(null, 'update')).toThrow(
+      "Invalid priority: null. Must be 'high', 'medium', or 'low'.",
+    )
+  })
+})
 
 function todo(overrides: Partial<Todo> & Pick<Todo, 'id' | 'title'>): Todo {
   return {

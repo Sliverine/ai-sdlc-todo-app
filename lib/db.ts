@@ -2,10 +2,12 @@ import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { getSingaporeNow } from './timezone'
+import type { Priority } from './priority'
 import { TodoValidationError } from './todo-errors'
 import { calculateNextDueDate } from './recurrence'
 
-export type Priority = 'high' | 'medium' | 'low'
+export { PRIORITY_ORDER, PRIORITY_VALUES } from './priority'
+export type { Priority } from './priority'
 export type RecurrencePattern = 'daily' | 'weekly' | 'monthly' | 'yearly'
 export type ReminderMinutes = 15 | 30 | 60 | 120 | 1440 | 2880 | 10080
 export type AuthChallengePurpose = 'registration' | 'login'
