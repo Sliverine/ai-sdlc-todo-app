@@ -4,6 +4,7 @@ This file records shared architectural decisions, resolved specification conflic
 
 ## Maintenance Rules
 
+- Before reviewing requirements or making design/implementation decisions, check the worktree and fetch the configured remote. If the worktree is clean and the current branch has an upstream, fast-forward with `git pull --ff-only` and confirm the branch is current. Fetch alone does not update the checked-out files. If local edits, divergence, or conflicts prevent a safe fast-forward, preserve the work and coordinate with its owner before proceeding against possibly stale files.
 - Do not delete, rename, or replace this file. Preserve it across refactors and documentation updates.
 - Record every design decision and implementation change in this file as part of the same task. Keep entries concise, noting what changed and the relevant rationale or behavior; do not omit changes because they seem small.
 - When source documents conflict, record the conflict and chosen resolution here. Update this record if the source-of-truth decision changes.
@@ -109,3 +110,15 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 - Evaluation and the PRP index describe search over tag names in places, while the one-shot and detailed search behavior specify titles and subtasks.
 - Test counts vary: the one-shot enumerates 12 Playwright specs, while other documentation says 11 feature suites. Due-date tests may be included in the CRUD suite; preserve behavior coverage rather than forcing a file count.
 - The security and testing rules add expectations not fully enumerated in the one-shot, including CSRF/rate limiting and unit/integration coverage. Treat them as additional project quality gates.
+- The README's former sample tree incorrectly placed PRPs under `.github/`; the canonical target tree now places all PRPs in the root `PRPs/` directory and is referenced by both agent guides.
+
+## Team Pitfalls and Prevention
+
+- **Stale checkout:** Remote commits may change requirements, APIs, or files while an agent is starting. Check `git status --short --branch`, fetch the configured remote, and fast-forward with `git pull --ff-only` before reviewing task requirements or making design/implementation decisions. Do not mistake `git fetch` alone for updating the working tree.
+- **Concurrent edits lost or accidentally included:** Inspect status and diffs before editing and before committing. Preserve work you did not create; never use reset/checkout or other destructive commands to clear conflicts. Stage only files belonging to the current task unless explicitly asked otherwise. If a safe update is blocked by local edits or branch divergence, coordinate rather than guessing.
+- **Conflicting or obsolete requirements:** Read this file, the relevant PRP, and the README hierarchy after synchronizing. Treat explicit resolutions here and in the one-shot spec as controlling; do not silently merge contradictory requirements. Record new decisions and update the shared source documents as required.
+- **Files created in the wrong place:** Follow the README target hierarchy. Keep PRPs at the repository root, not under `.github/`; keep application code, shared logic, tests, and scripts in `app/`, `lib/`, `tests/`, and `scripts/` respectively. The current repository is documentation-only, so scaffold before assuming source code or test commands exist.
+- **Cross-feature contract breaks:** Keep user data scoped to `session.userId`; keep database access server-side; use prepared statements and enable SQLite foreign keys. Use transactions for multi-table operations such as import. Recurrence must carry forward tags and reminder settings, and templates must preserve their specified subtask snapshot.
+- **Timezone/date regressions:** Route application date/time calculations through `lib/timezone.ts`. Test recurrence month-end/leap-year behavior and Singapore calendar boundaries rather than relying on local machine timezone.
+- **Unverified changes:** Use tests and checks appropriate to the changed layer: unit/integration for domain and persistence logic, Playwright for critical user flows, plus build/lint/type checks. Do not claim tests pass when the app has not yet been scaffolded or the checks were not run.
+- **Architecture drift:** Preserve the specified single Next.js app and monolithic main todo client page unless a shared design decision explicitly changes that convention. Do not introduce duplicate project trees or unapproved abstractions while parallel work is in flight.

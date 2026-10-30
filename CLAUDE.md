@@ -193,4 +193,14 @@ import { Priority, RecurrencePattern, Todo, Template } from '@/lib/db';
 
 ## Cross-Agent Synchronization
 
-Before designing or implementing, read the root `AGENT_SYNC.md` and the relevant task-specific PRP. Update `AGENT_SYNC.md` in the same task with every design decision and implementation change, briefly recording what changed and its rationale or behavior. Never delete, rename, or replace `AGENT_SYNC.md`.
+### Team Workflow and Pitfalls
+
+- Before reviewing requirements or making design/implementation decisions, check `git status --short --branch`, fetch the configured remote, and, if the worktree is clean and the current branch has an upstream, run `git pull --ff-only`. Confirm the working branch is current; fetch alone does not update checked-out files.
+- If local edits, divergence, or conflicts prevent a safe fast-forward, preserve all work and coordinate with its owner before proceeding against possibly stale files. Never reset, discard, or overwrite another contributor's changes to make synchronization easier.
+- After synchronization, read the root `AGENT_SYNC.md`, relevant task-specific PRP, and README target hierarchy before planning or implementing. Resolve conflicts using the documented source of truth and record any new resolution in `AGENT_SYNC.md`.
+- Inspect status and diffs before editing and committing; stage only files for the current task unless explicitly asked to include more. Avoid simultaneous edits to shared contracts without coordinating ownership.
+- Keep user data scoped to `session.userId`, database access server-side, SQLite foreign keys enabled, and multi-table writes transactional. Use `lib/timezone.ts` for Singapore date/time behavior and test date-boundary cases.
+- Respect feature dependencies, including recurrence inheritance of tags/reminders and templates' subtask snapshots. Preserve the documented monolithic main todo page and root-level `PRPs/` layout.
+- This repository currently contains planning/reference docs only. Follow the README hierarchy when scaffolding, and do not claim builds/tests passed until the application exists and those checks have run.
+
+Update `AGENT_SYNC.md` in the same task with every design decision and implementation change, briefly recording what changed and its rationale or behavior. Never delete, rename, or replace `AGENT_SYNC.md`.
