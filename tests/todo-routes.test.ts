@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => ({ getSession: mocks.getSession }))
 vi.mock('@/lib/db', () => ({
+  PRIORITY_VALUES: ['high', 'medium', 'low'],
   todoDB: {
     findAllByUser: mocks.findAllByUser,
     create: mocks.create,
@@ -110,6 +111,64 @@ describe('todo API routes', () => {
     })
   })
 
+  it('creates each explicit priority and defaults an explicit null to medium', async () => {
+    for (const priority of ['high', 'medium', 'low'] as const) {
+      const response = await createTodo(request('POST', { title: `Task ${priority}`, priority }))
+      expect(response.status).toBe(201)
+      expect(mocks.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority }))
+    }
+
+    const nullResponse = await createTodo(request('POST', { title: 'Default task', priority: null }))
+    expect(nullResponse.status).toBe(201)
+    expect(mocks.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'medium' }))
+  })
+
+  it.each(['urgent', 'HIGH', ''])('rejects invalid create priority %j with a descriptive 400', async (priority) => {
+    const response = await createTodo(request('POST', { title: 'Invalid priority', priority }))
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: `Invalid priority: ${priority}. Must be 'high', 'medium', or 'low'.`,
+    })
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+
+  it('leaves priority unchanged when a todo update omits it', async () => {
+    const response = await updateTodo(request('PUT', { title: 'Renamed task' }), routeContext('12'))
+
+    expect(response.status).toBe(200)
+    expect(mocks.update).toHaveBeenCalledWith(12, session.userId, { title: 'Renamed task' })
+  })
+
+  it('updates valid priorities and rejects invalid or null values without writing', async () => {
+    const validResponse = await updateTodo(request('PUT', { priority: 'high' }), routeContext('12'))
+    expect(validResponse.status).toBe(200)
+    expect(mocks.update).toHaveBeenLastCalledWith(12, session.userId, { priority: 'high' })
+
+    for (const priority of ['urgent', 'HIGH', '', null]) {
+      mocks.update.mockClear()
+      const response = await updateTodo(request('PUT', { priority }), routeContext('12'))
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: `Invalid priority: ${String(priority)}. Must be 'high', 'medium', or 'low'.`,
+      })
+      expect(mocks.update).not.toHaveBeenCalled()
+    }
+  })
+
+  it('filters direct todo-list queries by priority and rejects invalid filters', async () => {
+    const high = { ...existingTodo, id: 20, title: 'High todo', priority: 'high' }
+    const low = { ...existingTodo, id: 21, title: 'Low todo', priority: 'low' }
+    mocks.findAllByUser.mockReturnValue([high, existingTodo, low])
+
+    const filteredResponse = await listTodos(new NextRequest('http://localhost:3000/api/todos?priority=high'))
+    expect(filteredResponse.status).toBe(200)
+    expect(await filteredResponse.json()).toEqual([high])
+
+    const invalidResponse = await listTodos(new NextRequest('http://localhost:3000/api/todos?priority=urgent'))
+    expect(invalidResponse.status).toBe(400)
+  })
+
   it('distinguishes invalid todo associations from database failures', async () => {
     mocks.create.mockImplementationOnce(() => { throw new TodoValidationError('One or more tags are not available') })
     const validationResponse = await createTodo(request('POST', { title: 'Invalid tag' }))
@@ -177,7 +236,7 @@ describe('todo API routes', () => {
   })
 
   it('lists only the authenticated user’s todos', async () => {
-    const response = await listTodos()
+    const response = await listTodos(new NextRequest('http://localhost:3000/api/todos'))
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual([existingTodo])

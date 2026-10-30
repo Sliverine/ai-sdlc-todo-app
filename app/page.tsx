@@ -1,12 +1,12 @@
-'use client'
+﻿'use client'
 
 import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
 import { AddPasskeyButton } from './AddPasskeyButton'
 import { LogoutButton } from './LogoutButton'
-import type { Priority, RecurrencePattern, Todo } from '@/lib/db'
-import { sectionTodos } from '@/lib/todo-utils'
+import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Tag, Todo } from '@/lib/db'
+import { calculateProgress, sectionTodos } from '@/lib/todo-utils'
 import { useNotifications } from '@/lib/hooks/useNotifications'
 import { REMINDER_OPTIONS, reminderLabel, reminderMinutesSchema } from '@/lib/reminders'
 import { formatSingaporeDate, getSingaporeNow, normalizeDueDate, toSingaporeDateTimeInput } from '@/lib/timezone'
@@ -18,6 +18,7 @@ interface TodoForm {
   is_recurring: boolean
   recurrence_pattern: RecurrencePattern
   reminder_minutes: string
+  tag_ids: number[]
 }
 
 const emptyForm: TodoForm = {
@@ -27,17 +28,28 @@ const emptyForm: TodoForm = {
   is_recurring: false,
   recurrence_pattern: 'daily',
   reminder_minutes: '',
+  tag_ids: [],
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
-  const body: unknown = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const message = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
-      ? body.error
-      : 'The request could not be completed.'
-    throw new Error(message)
-  }
-  return body as T
+	const body: unknown = await response.json().catch(() => ({}))
+	if (!response.ok) {
+		const message = typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
+			? body.error
+			: 'The request could not be completed.'
+		throw new Error(message)
+	}
+	return body as T
+}
+
+function getTagForegroundColor(color: string): string {
+  const channels = color.slice(1).match(/.{2}/g)?.map((channel) => Number.parseInt(channel, 16) / 255) ?? [0, 0, 0]
+  const luminance = channels
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0)
+  const blackContrast = (luminance + 0.05) / 0.05
+  const whiteContrast = 1.05 / (luminance + 0.05)
+  return blackContrast >= whiteContrast ? '#000000' : '#FFFFFF'
 }
 
 export default function HomePage() {
@@ -49,30 +61,42 @@ export default function HomePage() {
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [saving, setSaving] = useState(false)
   const [pendingTodoIds, setPendingTodoIds] = useState<number[]>([])
+  const [expandedSubtaskTodoIds, setExpandedSubtaskTodoIds] = useState<number[]>([])
+  const [subtaskDrafts, setSubtaskDrafts] = useState<Record<number, string>>({})
+  const [pendingSubtaskKeys, setPendingSubtaskKeys] = useState<string[]>([])
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [form, setForm] = useState<TodoForm>(emptyForm)
+  const [availableTags, setAvailableTags] = useState<Tag[]>([])
+  const [tagModalOpen, setTagModalOpen] = useState(false)
+  const [tagDraftName, setTagDraftName] = useState('')
+  const [tagDraftColor, setTagDraftColor] = useState('#3B82F6')
+  const [tagDraftEditingId, setTagDraftEditingId] = useState<number | null>(null)
+  const [tagModalError, setTagModalError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const editDialogRef = useRef<HTMLElement | null>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const focusTodoIdRef = useRef<number | null>(null)
-  const [priorityFilter, setPriorityFilter] = useState('all')
+  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all')
   const notifications = useNotifications(!loading && !loadFailed)
 
   useEffect(() => {
     let active = true
     async function loadWorkspace() {
       try {
-        const [todoResponse, userResponse] = await Promise.all([
+        const [todoResponse, tagResponse, userResponse] = await Promise.all([
           fetch('/api/todos', { cache: 'no-store' }),
+          fetch('/api/tags', { cache: 'no-store' }),
           fetch('/api/auth/me', { cache: 'no-store' }),
         ])
-        const [savedTodos, userData] = await Promise.all([
+        const [savedTodos, savedTags, userData] = await Promise.all([
           readResponse<Todo[]>(todoResponse),
+          readResponse<Tag[]>(tagResponse),
           readResponse<{ user: { username: string } }>(userResponse),
         ])
         if (active) {
           setTodos(savedTodos)
+          setAvailableTags(savedTags)
           setUsername(userData.user.username)
           setLoadFailed(false)
           setPageError(null)
@@ -95,28 +119,38 @@ export default function HomePage() {
     }
   }, [loadAttempt])
 
-  useEffect(() => {
-    if (!editingTodo) {
-      returnFocusRef.current?.focus()
-      return
-    }
+	useEffect(() => {
+		if (!editingTodo) {
+			returnFocusRef.current?.focus()
+			return
+		}
+		returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+		editDialogRef.current?.querySelector<HTMLInputElement>('.todo-title-field input')?.focus()
+		return () => {
+			if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
+		}
+	}, [editingTodo])
 
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    editDialogRef.current?.querySelector<HTMLInputElement>('.todo-title-field input')?.focus()
-
-    return () => {
-      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
-    }
-  }, [editingTodo])
-
-  useEffect(() => {
-    const todoId = focusTodoIdRef.current
-    if (todoId === null || pendingTodoIds.includes(todoId)) return
-    document.getElementById(`todo-completion-${todoId}`)?.focus()
-    focusTodoIdRef.current = null
-  }, [pendingTodoIds])
+	useEffect(() => {
+		const todoId = focusTodoIdRef.current
+		if (todoId === null || pendingTodoIds.includes(todoId)) return
+		document.getElementById(`todo-completion-${todoId}`)?.focus()
+		focusTodoIdRef.current = null
+	}, [pendingTodoIds])
 
   const sections = sectionTodos(todos.filter((todo) => priorityFilter === 'all' || todo.priority === priorityFilter), now)
+  function cancelEditing() {
+    setEditingTodo(null)
+    setForm(emptyForm)
+    setFormError(null)
+  }
+
+  async function refreshTags() {
+    const response = await fetch('/api/tags', { cache: 'no-store' })
+    const tags = await readResponse<Tag[]>(response)
+    setAvailableTags(tags)
+    return tags
+  }
 
   function startEditing(todo: Todo) {
     setEditingTodo(todo)
@@ -127,13 +161,8 @@ export default function HomePage() {
       is_recurring: todo.is_recurring,
       recurrence_pattern: todo.recurrence_pattern ?? 'daily',
       reminder_minutes: todo.reminder_minutes?.toString() ?? '',
+      tag_ids: todo.tags?.map((tag) => tag.id) ?? [],
     })
-    setFormError(null)
-  }
-
-  function cancelEditing() {
-    setEditingTodo(null)
-    setForm(emptyForm)
     setFormError(null)
   }
 
@@ -143,8 +172,7 @@ export default function HomePage() {
 
     let dueDate: string | null = null
     if (form.due_date) {
-      const unchangedDate = editingTodo
-        && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
+      const unchangedDate = editingTodo && form.due_date === toSingaporeDateTimeInput(editingTodo.due_date)
       if (unchangedDate) {
         dueDate = editingTodo.due_date
       } else {
@@ -166,6 +194,7 @@ export default function HomePage() {
       is_recurring: form.is_recurring,
       recurrence_pattern: form.is_recurring ? form.recurrence_pattern : null,
       reminder_minutes: reminder,
+      tag_ids: form.tag_ids,
     }
   }
 
@@ -182,57 +211,69 @@ export default function HomePage() {
       return
     }
 
-    setSaving(true)
-    if (editingTodo) {
-      const original = editingTodo
-      const optimistic = { ...original, ...payload, updated_at: getSingaporeNow().toISOString() }
-      setTodos((current) => current.map((todo) => todo.id === original.id ? optimistic : todo))
-      try {
-        const response = await fetch(`/api/todos/${original.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        const saved = await readResponse<Todo>(response)
-        setTodos((current) => current.map((todo) => todo.id === original.id ? saved : todo))
-        cancelEditing()
-      } catch (error) {
-        setTodos((current) => current.map((todo) => todo.id === original.id ? original : todo))
-        setFormError(error instanceof Error ? error.message : 'Could not update this todo. Please try again.')
-      } finally {
-        setSaving(false)
-      }
-      return
-    }
+		setSaving(true)
+		if (editingTodo) {
+			const original = editingTodo
+			const optimistic = { ...original, ...payload, updated_at: getSingaporeNow().toISOString() }
+			setTodos((current) => current.map((todo) => todo.id === original.id ? optimistic : todo))
+			try {
+				const response = await fetch(`/api/todos/${original.id}`, {
+					method: 'PUT',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(payload),
+				})
+				const saved = await readResponse<Todo>(response)
+				setTodos((current) => current.map((todo) => todo.id === original.id ? saved : todo))
+				cancelEditing()
+			} catch (error) {
+				setTodos((current) => current.map((todo) => todo.id === original.id ? original : todo))
+				setFormError(error instanceof Error ? error.message : 'Could not update this todo. Please try again.')
+			} finally {
+				setSaving(false)
+			}
+			return
+		}
 
-    const optimisticId = -Date.now()
-    const optimistic: Todo = {
-      ...payload,
-      id: optimisticId,
-      user_id: 0,
-      created_at: getSingaporeNow().toISOString(),
-      updated_at: null,
-      last_notification_sent: null,
-      subtasks: [],
-      tags: [],
-    }
-    setTodos((current) => [...current, optimistic])
-    try {
-      const response = await fetch('/api/todos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const saved = await readResponse<Todo>(response)
-      setTodos((current) => current.map((todo) => todo.id === optimisticId ? saved : todo))
-      setForm(emptyForm)
-    } catch (error) {
-      setTodos((current) => current.filter((todo) => todo.id !== optimisticId))
-      setFormError(error instanceof Error ? error.message : 'Could not create this todo. Please try again.')
-    } finally {
-      setSaving(false)
-    }
-  }
+		const optimisticId = -Date.now()
+		const optimistic: Todo = {
+			...payload,
+			id: optimisticId,
+			user_id: 0,
+			created_at: getSingaporeNow().toISOString(),
+			updated_at: null,
+			last_notification_sent: null,
+			subtasks: [],
+			tags: [],
+		}
+		setTodos((current) => [...current, optimistic])
+		try {
+			const response = await fetch('/api/todos', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload),
+			})
+			const saved = await readResponse<Todo>(response)
+			setTodos((current) => current.map((todo) => todo.id === optimisticId ? saved : todo))
+			setForm(emptyForm)
+		} catch (error) {
+			setTodos((current) => current.filter((todo) => todo.id !== optimisticId))
+			setFormError(error instanceof Error ? error.message : 'Could not create this todo. Please try again.')
+		} finally {
+			setSaving(false)
+		}
+	}
+
+	async function removeTodo(todo: Todo) {
+		setPageError(null)
+		setTodos((current) => current.filter((item) => item.id !== todo.id))
+		try {
+			const response = await fetch(`/api/todos/${todo.id}`, { method: 'DELETE' })
+			await readResponse<{ success: boolean }>(response)
+		} catch {
+			setTodos((current) => current.some((item) => item.id === todo.id) ? current : [...current, todo])
+			setPageError('Could not delete this todo. Please try again.')
+		}
+	}
 
   async function toggleTodo(todo: Todo, completed: boolean) {
     if (pendingTodoIds.includes(todo.id)) return
@@ -265,15 +306,98 @@ export default function HomePage() {
     }
   }
 
-  async function removeTodo(todo: Todo) {
+  function replaceSubtaskInTodo(todoId: number, subtaskId: number, replacement: Subtask | null) {
+    setTodos((current) => current.map((todo) => {
+      if (todo.id !== todoId) return todo
+      const remaining = (todo.subtasks ?? []).filter((subtask) => subtask.id !== subtaskId)
+      const subtasks = replacement
+        ? [...remaining, replacement].sort((first, second) => first.position - second.position || first.id - second.id)
+        : remaining
+      return { ...todo, subtasks }
+    }))
+  }
+
+  function setSubtaskPending(key: string, pending: boolean) {
+    setPendingSubtaskKeys((current) => pending
+      ? [...current, key]
+      : current.filter((entry) => entry !== key))
+  }
+
+  async function addSubtask(todo: Todo) {
+    const title = (subtaskDrafts[todo.id] ?? '').trim()
+    const pendingKey = `todo:${todo.id}`
+    if (!title || pendingSubtaskKeys.includes(pendingKey)) return
+
     setPageError(null)
-    setTodos((current) => current.filter((item) => item.id !== todo.id))
+    setSubtaskPending(pendingKey, true)
+    const currentSubtasks = todo.subtasks ?? []
+    const optimisticId = -Date.now()
+    const optimistic: Subtask = {
+      id: optimisticId,
+      todo_id: todo.id,
+      title,
+      completed: false,
+      position: Math.max(-1, ...currentSubtasks.map((subtask) => subtask.position)) + 1,
+      created_at: getSingaporeNow().toISOString(),
+    }
+    replaceSubtaskInTodo(todo.id, optimisticId, optimistic)
+    setSubtaskDrafts((current) => ({ ...current, [todo.id]: '' }))
+
     try {
-      const response = await fetch(`/api/todos/${todo.id}`, { method: 'DELETE' })
+      const response = await fetch(`/api/todos/${todo.id}/subtasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      const saved = await readResponse<Subtask>(response)
+      replaceSubtaskInTodo(todo.id, optimisticId, saved)
+    } catch (error) {
+      replaceSubtaskInTodo(todo.id, optimisticId, null)
+      setSubtaskDrafts((current) => ({ ...current, [todo.id]: title }))
+      setPageError(error instanceof Error ? error.message : 'Could not add this subtask. Please try again.')
+    } finally {
+      setSubtaskPending(pendingKey, false)
+    }
+  }
+
+  async function toggleSubtask(todoId: number, subtask: Subtask) {
+    const pendingKey = `subtask:${subtask.id}`
+    if (pendingSubtaskKeys.includes(pendingKey)) return
+
+    setPageError(null)
+    setSubtaskPending(pendingKey, true)
+    const optimistic = { ...subtask, completed: !subtask.completed }
+    replaceSubtaskInTodo(todoId, subtask.id, optimistic)
+    try {
+      const response = await fetch(`/api/subtasks/${subtask.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed: optimistic.completed }),
+      })
+      replaceSubtaskInTodo(todoId, subtask.id, await readResponse<Subtask>(response))
+    } catch {
+      replaceSubtaskInTodo(todoId, subtask.id, subtask)
+      setPageError('Could not update this subtask. Please try again.')
+    } finally {
+      setSubtaskPending(pendingKey, false)
+    }
+  }
+
+  async function removeSubtask(todoId: number, subtask: Subtask) {
+    const pendingKey = `subtask:${subtask.id}`
+    if (pendingSubtaskKeys.includes(pendingKey)) return
+
+    setPageError(null)
+    setSubtaskPending(pendingKey, true)
+    replaceSubtaskInTodo(todoId, subtask.id, null)
+    try {
+      const response = await fetch(`/api/subtasks/${subtask.id}`, { method: 'DELETE' })
       await readResponse<{ success: boolean }>(response)
     } catch {
-      setTodos((current) => current.some((item) => item.id === todo.id) ? current : [...current, todo])
-      setPageError('Could not delete this todo. Please try again.')
+      replaceSubtaskInTodo(todoId, subtask.id, subtask)
+      setPageError('Could not delete this subtask. Please try again.')
+    } finally {
+      setSubtaskPending(pendingKey, false)
     }
   }
 
@@ -307,11 +431,93 @@ export default function HomePage() {
     }
   }
 
+  async function handleCreateTag() {
+    const trimmedName = tagDraftName.trim()
+    if (!trimmedName) {
+      setTagModalError('Tag name is required')
+      return
+    }
+    if (!/^#[0-9A-Fa-f]{6}$/.test(tagDraftColor)) {
+      setTagModalError('Color must be a valid hex code')
+      return
+    }
+
+    try {
+      const response = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmedName, color: tagDraftColor }),
+      })
+      await readResponse<Tag>(response)
+      await refreshTags()
+      setTagDraftName('')
+      setTagDraftColor('#3B82F6')
+      setTagModalError(null)
+      setTagDraftEditingId(null)
+    } catch (error) {
+      setTagModalError(error instanceof Error ? error.message : 'Could not save this tag.')
+    }
+  }
+
+  async function handleUpdateTag() {
+    if (tagDraftEditingId === null) return
+    const trimmedName = tagDraftName.trim()
+    if (!trimmedName) {
+      setTagModalError('Tag name is required')
+      return
+    }
+    if (!/^#[0-9A-Fa-f]{6}$/.test(tagDraftColor)) {
+      setTagModalError('Color must be a valid hex code')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/tags/${tagDraftEditingId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmedName, color: tagDraftColor }),
+      })
+      const parsed = await readResponse<Tag>(response)
+      setAvailableTags((current) => current.map((tag) => tag.id === parsed.id ? parsed : tag))
+      setTodos((current) => current.map((todo) => ({
+        ...todo,
+        tags: todo.tags?.map((tag) => tag.id === parsed.id ? parsed : tag),
+      })))
+      setTagDraftName('')
+      setTagDraftColor('#3B82F6')
+      setTagDraftEditingId(null)
+      setTagModalError(null)
+    } catch (error) {
+      setTagModalError(error instanceof Error ? error.message : 'Could not update this tag.')
+    }
+  }
+
+  async function handleDeleteTag(tagId: number) {
+    try {
+      const response = await fetch(`/api/tags/${tagId}`, { method: 'DELETE' })
+      await readResponse<{ success: boolean }>(response)
+      setAvailableTags((current) => current.filter((tag) => tag.id !== tagId))
+      setForm((current) => ({ ...current, tag_ids: current.tag_ids.filter((id) => id !== tagId) }))
+      setTodos((current) => current.map((todo) => ({
+        ...todo,
+        tags: todo.tags?.filter((tag) => tag.id !== tagId),
+      })))
+      if (tagDraftEditingId === tagId) {
+        setTagDraftEditingId(null)
+        setTagDraftName('')
+        setTagDraftColor('#3B82F6')
+      }
+    } catch (error) {
+      setTagModalError(error instanceof Error ? error.message : 'Could not delete this tag.')
+    }
+  }
+
   function renderTodoForm() {
     return (
       <form className="todo-create-form" onSubmit={(event) => void handleSubmit(event)}>
         <div className="todo-form-heading">
           <h2>{editingTodo ? 'Edit todo' : 'Add a todo'}</h2>
+          <button className="quiet-button" type="button" onClick={() => setTagModalOpen(true)}>Manage tags</button>
           {editingTodo && <button className="quiet-button" type="button" onClick={cancelEditing}>Cancel</button>}
         </div>
         <label className="todo-field todo-title-field">
@@ -356,6 +562,42 @@ export default function HomePage() {
               {REMINDER_OPTIONS.map((option) => <option key={option.minutes} value={option.minutes}>{option.label}</option>)}
             </select>
           </label>
+        </div>
+        <div className="tag-picker-wrap">
+          <div className="tag-picker-header">
+            <span>Tags</span>
+            <button className="quiet-button compact-button" type="button" onClick={() => setTagModalOpen(true)}>Manage tags</button>
+          </div>
+          <div className="tag-picker">
+            {availableTags.length === 0 ? (
+              <span className="tag-empty-text">No tags yet.</span>
+            ) : (
+              availableTags.map((tag) => {
+                const selected = form.tag_ids.includes(tag.id)
+                return (
+                  <button
+                    key={tag.id}
+                    className={selected ? 'tag-pill selected-tag' : 'tag-pill'}
+                    onClick={() => setForm((current) => ({
+                      ...current,
+                      tag_ids: current.tag_ids.includes(tag.id)
+                        ? current.tag_ids.filter((id) => id !== tag.id)
+                        : [...current.tag_ids, tag.id],
+                    }))}
+                    style={{
+                      backgroundColor: selected ? tag.color : undefined,
+                      borderColor: tag.color,
+                      color: selected ? getTagForegroundColor(tag.color) : undefined,
+                    }}
+                    type="button"
+                  >
+                    {selected && <span aria-hidden>✓</span>}
+                    <span>{tag.name}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>
         </div>
         <div className="todo-form-footer">
           <label className="recurring-control">
@@ -413,7 +655,9 @@ export default function HomePage() {
                 <div className="todo-copy">
                   <p className={todo.completed ? 'todo-title is-complete' : 'todo-title'}>{todo.title}</p>
                   <div className="todo-metadata">
-                    <span className={`priority-label priority-${todo.priority}`}>{todo.priority}</span>
+                    <span aria-label={`${todo.priority} priority`} className={`priority-badge priority-badge-${todo.priority}`}>
+                      {todo.priority[0].toUpperCase() + todo.priority.slice(1)}
+                    </span>
                     {todo.due_date && <span>{formatSingaporeDate(todo.due_date)}</span>}
                     {todo.is_recurring && todo.recurrence_pattern && <span className="recurrence-badge" aria-label={`Repeats ${todo.recurrence_pattern}`}>
                       &#128260; {todo.recurrence_pattern}
@@ -421,13 +665,100 @@ export default function HomePage() {
                     {todo.reminder_minutes !== null && <span className="reminder-badge" aria-label={`Reminder ${reminderLabel(todo.reminder_minutes)}`}>
                       &#128276; {reminderLabel(todo.reminder_minutes)}
                     </span>}
-                    {todo.tags?.map((tag) => <span className="todo-tag" key={tag.id}>{tag.name}</span>)}
+                    {todo.tags?.map((tag) => (
+                      <span
+                        className="todo-tag"
+                        key={tag.id}
+                        style={{ backgroundColor: tag.color, borderColor: tag.color, color: getTagForegroundColor(tag.color) }}
+                      >
+                        {tag.name}
+                      </span>
+                    ))}
                   </div>
-                  {todo.subtasks && todo.subtasks.length > 0 && (
-                    <p className="todo-subtask-count">
-                      {todo.subtasks.filter((subtask) => subtask.completed).length}/{todo.subtasks.length} subtasks
-                    </p>
-                  )}
+                  {(() => {
+                    const subtasks = todo.subtasks ?? []
+                    const progress = calculateProgress(subtasks)
+                    const expanded = expandedSubtaskTodoIds.includes(todo.id)
+                    const addPending = pendingSubtaskKeys.includes(`todo:${todo.id}`)
+                    return (
+                      <div className="todo-subtasks">
+                        <button
+                          aria-controls={`subtasks-${todo.id}`}
+                          aria-expanded={expanded}
+                          className="subtask-toggle"
+                          onClick={() => setExpandedSubtaskTodoIds((current) => expanded
+                            ? current.filter((id) => id !== todo.id)
+                            : [...current, todo.id])}
+                          type="button"
+                        >
+                          {expanded ? 'Hide' : 'Show'} subtasks
+                        </button>
+                        {progress.total > 0 && (
+                          <div className="subtask-progress">
+                            <div className="subtask-progress-label">
+                              <span>{progress.completed}/{progress.total} subtasks</span>
+                              <span>{progress.percent}%</span>
+                            </div>
+                            <div
+                              aria-label="Subtask completion"
+                              aria-valuemax={100}
+                              aria-valuemin={0}
+                              aria-valuenow={progress.percent}
+                              aria-valuetext={`${progress.completed} of ${progress.total} subtasks complete`}
+                              className={`subtask-progress-track${progress.percent === 100 ? ' complete' : ''}`}
+                              role="progressbar"
+                            >
+                              <div className="subtask-progress-fill" style={{ width: `${progress.percent}%` }} />
+                            </div>
+                          </div>
+                        )}
+                        <div className="subtask-panel" hidden={!expanded} id={`subtasks-${todo.id}`}>
+                          <ul className="subtask-list">
+                            {subtasks.map((subtask) => {
+                              const subtaskPending = pendingSubtaskKeys.includes(`subtask:${subtask.id}`)
+                              return (
+                                <li className="subtask-row" key={subtask.id}>
+                                  <input
+                                    aria-label={`Mark subtask ${subtask.title} ${subtask.completed ? 'incomplete' : 'complete'}`}
+                                    checked={subtask.completed}
+                                    disabled={subtaskPending}
+                                    onChange={() => void toggleSubtask(todo.id, subtask)}
+                                    type="checkbox"
+                                  />
+                                  <span className={subtask.completed ? 'subtask-title is-complete' : 'subtask-title'}>{subtask.title}</span>
+                                  <button
+                                    aria-label={`Delete subtask ${subtask.title}`}
+                                    className="subtask-delete-button"
+                                    disabled={subtaskPending}
+                                    onClick={() => void removeSubtask(todo.id, subtask)}
+                                    type="button"
+                                  >
+                                    Delete
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                          <form
+                            className="subtask-add-form"
+                            onSubmit={(event) => { event.preventDefault(); void addSubtask(todo) }}
+                          >
+                            <input
+                              aria-label={`Subtask title for ${todo.title}`}
+                              autoComplete="off"
+                              disabled={addPending}
+                              onChange={(event) => setSubtaskDrafts((current) => ({ ...current, [todo.id]: event.target.value }))}
+                              placeholder="Add a subtask"
+                              value={subtaskDrafts[todo.id] ?? ''}
+                            />
+                            <button disabled={addPending || !(subtaskDrafts[todo.id] ?? '').trim()} type="submit">
+                              Add subtask
+                            </button>
+                          </form>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
                 <div className="todo-actions">
                   <button disabled={pendingTodoIds.includes(todo.id)} type="button" onClick={() => startEditing(todo)}>Edit</button>
@@ -438,6 +769,84 @@ export default function HomePage() {
           </ul>
         ) : <p className="section-empty">Nothing here.</p>}
       </section>
+    )
+  }
+
+  function renderTagModal() {
+    if (!tagModalOpen) return null
+
+    return (
+      <div className="todo-dialog-backdrop" onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          setTagModalOpen(false)
+          setTagDraftEditingId(null)
+          setTagDraftName('')
+          setTagDraftColor('#3B82F6')
+          setTagModalError(null)
+        }
+      }}>
+        <section aria-modal="true" className="tag-modal" role="dialog">
+          <div className="todo-dialog-heading">
+            <h2>Manage tags</h2>
+            <button aria-label="Close tags dialog" className="dialog-close" onClick={() => {
+              setTagModalOpen(false)
+              setTagDraftEditingId(null)
+              setTagDraftName('')
+              setTagDraftColor('#3B82F6')
+              setTagModalError(null)
+            }} type="button">×</button>
+          </div>
+
+          <div className="tag-list">
+            {availableTags.length === 0 ? (
+              <p className="tag-empty-text">No tags yet. Add one below.</p>
+            ) : (
+              availableTags.map((tag) => (
+                <div className="tag-row" key={tag.id}>
+                  <span className="tag-pill inline-tag" style={{ backgroundColor: tag.color, color: getTagForegroundColor(tag.color), borderColor: tag.color }}>
+                    <span className="tag-label">{tag.name}</span>
+                  </span>
+                  <div className="tag-actions">
+                    <button type="button" onClick={() => {
+                      setTagDraftEditingId(tag.id)
+                      setTagDraftName(tag.name)
+                      setTagDraftColor(tag.color)
+                      setTagModalError(null)
+                    }}>Edit</button>
+                    <button className="delete-action" type="button" onClick={() => void handleDeleteTag(tag.id)}>Delete</button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="tag-form">
+            <input
+              onChange={(event) => setTagDraftName(event.target.value)}
+              placeholder="Tag name"
+              type="text"
+              value={tagDraftName}
+            />
+            <input
+              onChange={(event) => setTagDraftColor(event.target.value)}
+              type="color"
+              value={tagDraftColor}
+            />
+            <button className="primary-button" onClick={() => void (tagDraftEditingId === null ? handleCreateTag() : handleUpdateTag())} type="button">
+              {tagDraftEditingId === null ? 'Create tag' : 'Update tag'}
+            </button>
+          </div>
+          {tagDraftEditingId !== null && (
+            <button className="quiet-button full-width-button" onClick={() => {
+              setTagDraftEditingId(null)
+              setTagDraftName('')
+              setTagDraftColor('#3B82F6')
+              setTagModalError(null)
+            }} type="button">Cancel edit</button>
+          )}
+          {tagModalError && <p className="todo-error" role="alert">{tagModalError}</p>}
+        </section>
+      </div>
     )
   }
 
@@ -478,9 +887,9 @@ export default function HomePage() {
           <h2>Your tasks</h2>
           <span>{new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit' }).format(now)} SGT</span>
         </div>
-        <label className="todo-field">
+        <label className="todo-field priority-filter">
           <span>Filter by priority</span>
-          <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)}>
+          <select aria-label="Filter by priority" value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value as Priority | 'all')}>
             <option value="all">All priorities</option>
             <option value="high">High</option>
             <option value="medium">Medium</option>
@@ -520,6 +929,7 @@ export default function HomePage() {
           </section>
         </div>
       )}
+      {renderTagModal()}
     </main>
   )
 }

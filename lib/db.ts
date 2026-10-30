@@ -2,10 +2,12 @@ import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { getSingaporeNow, parseDueDate } from './timezone'
+import type { Priority } from './priority'
 import { TodoValidationError } from './todo-errors'
 import { calculateNextDueDate } from './recurrence'
 
-export type Priority = 'high' | 'medium' | 'low'
+export { PRIORITY_ORDER, PRIORITY_VALUES } from './priority'
+export type { Priority } from './priority'
 export type RecurrencePattern = 'daily' | 'weekly' | 'monthly' | 'yearly'
 export type ReminderMinutes = 15 | 30 | 60 | 120 | 1440 | 2880 | 10080
 export type AuthChallengePurpose = 'registration' | 'login'
@@ -83,12 +85,31 @@ export interface Subtask {
   created_at: string
 }
 
+export interface CreateSubtaskDto {
+  title: string
+}
+
+export interface UpdateSubtaskDto {
+  title?: string
+  completed?: boolean
+}
+
 export interface Tag {
   id: number
   user_id: number
   name: string
   color: string
   created_at: string
+}
+
+export interface CreateTagInput {
+  name: string
+  color?: string
+}
+
+export interface UpdateTagInput {
+  name?: string
+  color?: string
 }
 
 export interface Template {
@@ -498,8 +519,175 @@ export function createTodoDB(database: Database.Database) {
   }
 }
 
+export function createSubtaskDB(database: Database.Database) {
+  function findById(id: number, userId: number): Subtask | null {
+    const row = database.prepare(`
+      SELECT subtasks.id, subtasks.todo_id, subtasks.title, subtasks.completed,
+        subtasks.position, subtasks.created_at
+      FROM subtasks INNER JOIN todos ON todos.id = subtasks.todo_id
+      WHERE subtasks.id = ? AND todos.user_id = ?
+    `).get(id, userId) as SubtaskRow | undefined
+    return row ? { ...row, completed: Boolean(row.completed) } : null
+  }
+
+  return {
+    findByTodoId(todoId: number, userId: number): Subtask[] {
+      const rows = database.prepare(`
+        SELECT subtasks.id, subtasks.todo_id, subtasks.title, subtasks.completed,
+          subtasks.position, subtasks.created_at
+        FROM subtasks INNER JOIN todos ON todos.id = subtasks.todo_id
+        WHERE subtasks.todo_id = ? AND todos.user_id = ?
+        ORDER BY subtasks.position, subtasks.id
+      `).all(todoId, userId) as SubtaskRow[]
+      return rows.map((row) => ({ ...row, completed: Boolean(row.completed) }))
+    },
+
+    create(todoId: number, userId: number, input: CreateSubtaskDto): Subtask | null {
+      const result = database.prepare(`
+        INSERT INTO subtasks (todo_id, title, position, created_at)
+        SELECT todos.id, ?,
+          (SELECT COALESCE(MAX(position) + 1, 0) FROM subtasks WHERE todo_id = todos.id),
+          ?
+        FROM todos WHERE todos.id = ? AND todos.user_id = ?
+      `).run(input.title, getSingaporeNow().toISOString(), todoId, userId)
+      return result.changes === 1 ? findById(Number(result.lastInsertRowid), userId) : null
+    },
+
+    update(id: number, userId: number, input: UpdateSubtaskDto): Subtask | null {
+      const assignments: string[] = []
+      const values: unknown[] = []
+      if (input.title !== undefined) {
+        assignments.push('title = ?')
+        values.push(input.title)
+      }
+      if (input.completed !== undefined) {
+        assignments.push('completed = ?')
+        values.push(input.completed ? 1 : 0)
+      }
+      if (assignments.length === 0) return findById(id, userId)
+
+      const result = database.prepare(`
+        UPDATE subtasks SET ${assignments.join(', ')}
+        WHERE id = ? AND EXISTS (
+          SELECT 1 FROM todos WHERE todos.id = subtasks.todo_id AND todos.user_id = ?
+        )
+      `).run(...values, id, userId)
+      return result.changes === 1 ? findById(id, userId) : null
+    },
+
+    delete(id: number, userId: number): boolean {
+      const result = database.prepare(`
+        DELETE FROM subtasks WHERE id = ? AND EXISTS (
+          SELECT 1 FROM todos WHERE todos.id = subtasks.todo_id AND todos.user_id = ?
+        )
+      `).run(id, userId)
+      return result.changes === 1
+    },
+  }
+}
+
 export const db = createDatabase(process.env.DATABASE_PATH ?? join(process.cwd(), 'todos.db'))
 export const todoDB = createTodoDB(db)
+export const subtaskDB = createSubtaskDB(db)
+
+export function createTagDB(database: Database.Database) {
+  function normalizeName(value: string | undefined): string {
+    const trimmed = value?.trim() ?? ''
+    if (!trimmed) throw new Error('Tag name is required')
+    return trimmed
+  }
+
+  function normalizeColor(value: string | undefined, fallback = '#3B82F6'): string {
+    const resolved = value ?? fallback
+    if (!/^#[0-9A-Fa-f]{6}$/.test(resolved)) {
+      throw new Error('Color must be a valid hex code')
+    }
+    return resolved
+  }
+
+  return {
+    findAllByUser(userId: number): Tag[] {
+      return database.prepare('SELECT * FROM tags WHERE user_id = ? ORDER BY name COLLATE NOCASE').all(userId) as Tag[]
+    },
+
+    findById(id: number, userId: number): Tag | null {
+      const row = database.prepare('SELECT * FROM tags WHERE id = ? AND user_id = ?').get(id, userId) as Tag | undefined
+      return row ?? null
+    },
+
+    create(userId: number, input: CreateTagInput): Tag {
+      const name = normalizeName(input.name)
+      const color = normalizeColor(input.color, '#3B82F6')
+      try {
+        const result = database.prepare('INSERT INTO tags (user_id, name, color, created_at) VALUES (?, ?, ?, ?)')
+          .run(userId, name, color, getSingaporeNow().toISOString())
+        const created = database.prepare('SELECT * FROM tags WHERE id = ?').get(Number(result.lastInsertRowid)) as Tag | undefined
+        if (!created) throw new Error('Unable to create tag')
+        return created
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('UNIQUE') || message.includes('already exists')) {
+          throw new Error('A tag with this name already exists')
+        }
+        throw error
+      }
+    },
+
+    update(id: number, userId: number, input: UpdateTagInput): Tag | null {
+      const existing = this.findById(id, userId)
+      if (!existing) return null
+
+      const name = input.name === undefined ? existing.name : normalizeName(input.name)
+      const color = input.color === undefined ? existing.color : normalizeColor(input.color)
+
+      try {
+        database.prepare('UPDATE tags SET name = ?, color = ? WHERE id = ? AND user_id = ?').run(name, color, id, userId)
+        return this.findById(id, userId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('UNIQUE') || message.includes('already exists')) {
+          throw new Error('A tag with this name already exists')
+        }
+        throw error
+      }
+    },
+
+    delete(id: number, userId: number): boolean {
+      const result = database.prepare('DELETE FROM tags WHERE id = ? AND user_id = ?').run(id, userId)
+      return result.changes === 1
+    },
+
+    attachToTodo(todoId: number, tagId: number, userId: number): boolean {
+      const todo = database.prepare('SELECT id FROM todos WHERE id = ? AND user_id = ?').get(todoId, userId)
+      const tag = database.prepare('SELECT id FROM tags WHERE id = ? AND user_id = ?').get(tagId, userId)
+      if (!todo || !tag) return false
+
+      database.prepare('INSERT OR IGNORE INTO todo_tags (todo_id, tag_id) VALUES (?, ?)').run(todoId, tagId)
+      return true
+    },
+
+    detachFromTodo(todoId: number, tagId: number, userId: number): boolean {
+      const todo = database.prepare('SELECT id FROM todos WHERE id = ? AND user_id = ?').get(todoId, userId)
+      const tag = database.prepare('SELECT id FROM tags WHERE id = ? AND user_id = ?').get(tagId, userId)
+      if (!todo || !tag) return false
+
+      database.prepare('DELETE FROM todo_tags WHERE todo_id = ? AND tag_id = ?').run(todoId, tagId)
+      return true
+    },
+
+    findByTodoId(todoId: number): Tag[] {
+      return database.prepare(`
+        SELECT tags.*
+        FROM tags
+        INNER JOIN todo_tags ON todo_tags.tag_id = tags.id
+        WHERE todo_tags.todo_id = ?
+        ORDER BY tags.name COLLATE NOCASE
+      `).all(todoId) as Tag[]
+    },
+  }
+}
+
+export const tagDB = createTagDB(db)
 
 export function createAuthDataDB(database: Database.Database) {
   const users = {
