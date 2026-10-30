@@ -123,6 +123,15 @@ describe('todo sorting and sections', () => {
     expect(todos).toEqual(original)
   })
 
+  it('sorts same-priority dated todos before undated todos', () => {
+    const todos = [
+      todo({ id: 1, title: 'Undated', priority: 'low', created_at: '2026-10-30T12:00:00.000Z' }),
+      todo({ id: 2, title: 'Dated', priority: 'low', due_date: '2026-11-01T12:00:00.000Z' }),
+    ]
+
+    expect(sortTodos(todos).map(({ id }) => id)).toEqual([2, 1])
+  })
+
   it('places past-due incomplete todos in overdue, exact-now and undated todos in pending', () => {
     const sections = sectionTodos([
       todo({ id: 1, title: 'overdue', due_date: '2026-10-29T23:59:59.999Z' }),
@@ -138,11 +147,12 @@ describe('todo sorting and sections', () => {
 
   it('orders completed todos by most recently updated, falling back to creation time', () => {
     const sections = sectionTodos([
-      todo({ id: 1, title: 'created latest', completed: true, created_at: '2026-10-29T23:00:00.000Z' }),
       todo({ id: 2, title: 'updated latest', completed: true, created_at: '2026-10-29T00:00:00.000Z', updated_at: '2026-10-29T23:30:00.000Z' }),
+      todo({ id: 1, title: 'created latest', completed: true, created_at: '2026-10-29T23:00:00.000Z' }),
+      todo({ id: 3, title: 'created earlier', completed: true, created_at: '2026-10-29T22:00:00.000Z' }),
     ], now)
 
-    expect(sections.completed.map(({ id }) => id)).toEqual([2, 1])
+    expect(sections.completed.map(({ id }) => id)).toEqual([2, 1, 3])
   })
 })
 

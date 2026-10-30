@@ -619,7 +619,7 @@ export default function HomePage() {
           </label>
           <label className="todo-field">
             <span>Priority</span>
-            <select onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value as Priority }))} value={form.priority}>
+            <select aria-label="Priority" onChange={(event) => setForm((current) => ({ ...current, priority: event.target.value as Priority }))} value={form.priority}>
               <option value="high">High</option>
               <option value="medium">Medium</option>
               <option value="low">Low</option>

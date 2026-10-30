@@ -37,7 +37,7 @@ test('creates, edits, completes, reopens, and deletes a todo', async ({ page }) 
   await page.getByRole('button', { name: 'Add todo' }).click()
   const initialRow = page.locator('.todo-row').filter({ hasText: 'Review the weekly plan' })
   await expect(page.locator('.pending-section')).toContainText('Review the weekly plan')
-  await expect(initialRow).toContainText('medium')
+  await expect(initialRow).toContainText('Medium')
 
   await initialRow.getByRole('button', { name: 'Edit' }).click()
   const dialog = page.getByRole('dialog')
@@ -75,16 +75,16 @@ test('creates a future-dated todo with priority, recurrence, and reminder metada
 
   await page.getByLabel('Task').fill('Submit the project report')
   await page.getByLabel('Due date and time (Singapore)').fill(await singaporeDateTimeAfter(page, 2))
-  await page.getByLabel('Priority').selectOption('high')
+  await page.getByLabel('Priority', { exact: true }).selectOption('high')
   await page.getByLabel('Repeat this todo').check()
   await page.locator('.recurrence-select select').selectOption('weekly')
   await page.getByLabel('Reminder').selectOption('15')
   await page.getByRole('button', { name: 'Add todo' }).click()
 
   const todoRow = page.locator('.todo-row').filter({ hasText: 'Submit the project report' })
-  await expect(todoRow).toContainText('high')
   await expect(todoRow.getByLabel('Repeats weekly')).toContainText('🔄 weekly')
-  await expect(todoRow).toContainText('Reminder set')
+  await expect(todoRow).toContainText('High')
+  await expect(todoRow).toContainText('15m')
   await cdp.detach()
 })
 
