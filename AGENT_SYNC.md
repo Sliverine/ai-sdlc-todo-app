@@ -1,14 +1,11 @@
 # Cross-Agent Synchronization
 
-This file is an optional reference for shared architectural decisions, resolved specification conflicts, and implementation-order guidance. Consult it only when the user explicitly requests it.
+Optional reference for core cross-cutting architecture decisions, behavior resolutions, and open product questions. Consult only when explicitly requested.
 
 ## Maintenance Rules
 
-- Before reviewing requirements or making design/implementation decisions, check the worktree and fetch the configured remote. If the worktree is clean and the current branch has an upstream, fast-forward with `git pull --ff-only` and confirm the branch is current. Fetch alone does not update the checked-out files. If local edits, divergence, or conflicts prevent a safe fast-forward, preserve the work and coordinate with its owner before proceeding against possibly stale files.
-- Do not delete, rename, or replace this file. Preserve it across refactors and documentation updates.
-- Record only core cross-cutting decisions, such as architecture, shared contracts, security, or product behavior. Do not log routine implementation details or every file change.
-- When explicitly asked to maintain this file, record only core cross-cutting decisions and source-of-truth resolutions. Do not record routine feature work or every implementation change.
-- Distinguish approved decisions from unresolved product questions. Recording a resolution here does not mean the conflicting source documents or application have already been updated.
+- Keep this file opt-in; do not make routine updates. If explicitly asked to maintain it, record only core shared decisions and unresolved questions, not implementation history.
+- Preserve approved decisions and distinguish them from open questions; this file does not replace the source PRPs or implementation.
 
 ## System Components
 
@@ -21,26 +18,9 @@ The target is one Next.js 16 App Router application with React 19, Tailwind CSS 
 - **Client experience:** A main client todo page owns list workflows and feature UI; separate login and calendar pages provide authentication and calendar views. Keep the main todo page monolithic as specified by project conventions.
 - **Quality and delivery:** Unit/integration tests cover logic and persistence; Playwright covers user flows including virtual WebAuthn. Build, lint, type safety, accessibility, security, performance, and persistent deployment are evaluation concerns.
 
-## Project Structure
-
-`README.md` section 4, **Project Structure Verification**, is the canonical target hierarchy. Keep `PRPs/` at the repository root; `.github/` contains Copilot instructions, not PRPs. The repository now has an in-progress Next.js application scaffold at the root; add remaining code within that hierarchy. Any future hierarchy change must update the README and both agent instruction files in the same task.
-
 ## Dependency-Safe Build Order
 
-The one-shot build order and the PRP index differ. Use this sequence because it satisfies both the shared API authentication contract and the feature dependencies described by the detailed PRPs:
-
-1. **Foundation:** Define all schema and types together; initialize SQLite with foreign keys; add Singapore timezone utilities.
-2. **Authentication:** Implement session primitives and WebAuthn before user-scoped API routes.
-3. **Todo CRUD:** Implement user-scoped create/read/update/delete, validation, sorting/sections, and optimistic UI behavior.
-4. **Priority:** Add priority validation, sorting, filters, and accessible badges.
-5. **Subtasks, tags, and reminders:** These can be developed independently once the todo contract is stable.
-6. **Recurring todos:** Complete recurrence only after priority, tags, and reminders exist, because a new occurrence inherits all of them.
-7. **Templates:** Implement after priority, recurrence, reminders, and subtasks; templates capture subtask definitions.
-8. **Search/filtering:** Implement after priority, tags, and subtasks are available.
-9. **Export/import:** Implement after subtasks and tags; import must validate before writes and use one transaction.
-10. **Calendar:** Implement after todo/priority and authentication contracts; holidays are global data.
-
-Steps 5 can proceed in parallel after CRUD if ownership and API contracts remain stable. Steps 8-10 can proceed independently once their listed dependencies are met.
+Implement the shared schema/time utilities, authentication, todo CRUD, and priority first. Subtasks, tags, and reminders can proceed independently after CRUD; recurrence follows because it inherits tags/reminders; templates follow recurrence and subtasks. Search needs priority/tags/subtasks, export/import needs subtasks/tags, and calendar needs todos, priority, and authentication.
 
 ## Implementation Ownership and Contracts
 
@@ -53,34 +33,16 @@ Steps 5 can proceed in parallel after CRUD if ownership and API contracts remain
 
 ## Resolved Specification Conflicts
 
-Honor the decisions recorded here when source documents disagree. The original resolutions below follow the one-shot spec; the approved clarifications that follow identify additional decisions and intentional departures from it.
+When source documents conflict, prefer these durable behavior decisions and update the owning PRP when needed:
 
-- **Authentication order:** Build auth/session primitives before protected routes. The PRP index's suggestion to defer authentication is incompatible with the session contract for protected feature APIs.
-- **Recurring inheritance:** New instances inherit priority, tags, reminder timing, and recurrence settings. Therefore tags and reminders must be ready before recurrence integration is considered complete.
-- **Templates:** Capture subtasks as `{ title, position }` JSON and recreate them on use. Concrete due dates and tags are not captured; an optional relative due-date offset is stored.
-- **Search:** Search todo titles and subtask titles, case-insensitively with a 300 ms debounce. Do not add tag-name text search unless the one-shot spec is revised. Apply filters in this order: search, priority, tag, completion, date range.
-- **Reminders:** Poll every 30 seconds; the user guide's one-minute description is outdated relative to the one-shot spec.
-- **Todo deletion:** Delete immediately without a confirmation step and rely on SQLite cascade behavior for subtasks and tag links.
-- **Export/import:** JSON export includes subtasks and tag names/colors, but not original IDs. CSV is one-way. Import validates the complete structure before writing, remaps IDs, resolves tags by case-insensitive name, and runs in one transaction.
-- **Calendar filters:** The calendar shows all of the user's dated todos; list-view filters are not carried over.
-
-### Approved Clarifications (2026-10-30)
-
-These decisions were approved for this synchronization document. They authorize no application implementation by themselves.
-
-| Topic | Conflict or gap | Approved decision |
-|---|---|---|
-| Public authentication endpoints | The blanket session-first rule would prevent initial registration and login. | Initial registration/login options and verification are public entry points, with input validation, origin protection, and rate limiting. Protected feature APIs still authenticate first. |
-| Additional passkeys | PRP 11 requires multiple authenticators, but new-user registration rejects an existing username and does not define enrollment. | Provide a separate authenticated enrollment flow bound to the current user. A username alone must never authorize adding a credential. Exact endpoint details remain an implementation contract to define. |
-| Challenge lifecycle | PRP 11 leaves challenge persistence and browser binding underspecified. | Challenges must be short-lived, browser-bound, and single-use, with atomic consumption. Choose the storage mechanism explicitly before implementing authentication. |
-| Calendar grid | The one-shot permits five or six rows, while PRP 10's acceptance criteria require 42 cells. | Emit exactly six rows of seven cells, including adjacent-month dates. This intentionally chooses the detailed acceptance criteria over the condensed grid description. |
-| Reminder eligibility and delivery | PRP 04 permits stale overdue reminders and uses exactly-once wording despite documenting a multi-tab race; the one-shot bounds eligibility at the due date. | Use the inclusive window `[due_date - reminder_minutes, due_date]`, excluding completed and already-acknowledged reminders. Delivery is best-effort while an app tab is open and polling, not guaranteed exactly-once across tabs. Use a notification tag to mitigate duplicate OS notifications and acknowledge through the existing todo update endpoint. |
-| Reminder acknowledgement | The one-shot does not spell out the acknowledgement call; PRP 04 uses `PUT /api/todos/[id]`. | Retain that existing update endpoint for acknowledgement, enforce ownership, and stamp sent time server-side. Reset acknowledgement only when the due date or reminder timing actually changes. Do not treat this acknowledgement as proof of exactly-once delivery. |
-| Template corruption | PRP 07 creates a todo without subtasks when stored `subtasks_json` cannot be parsed. | Surface an explicit error and create nothing if the stored checklist is malformed. This intentionally departs from the silent fallback to avoid an incomplete, success-shaped result. |
-| Template date requirements | A template can omit its offset, but recurring todos require a due date and reminders need a date anchor. | Require a valid relative due-date offset for templates with recurrence or reminders, validate at save and use time, and expose an offset control in the UI. Templates without either setting may omit the offset. |
-| Interactive deadlines and restoration | A blanket future-date check would prevent completion or renaming of overdue todos and restoration of historical backups. | Apply the minimum-one-minute rule to newly supplied or changed interactive deadlines. Allow unchanged overdue dates on other updates and valid historical dates on import. Validate recurrence/reminder invariants against the merged record. |
-| Tag contrast | PRP 06 calls for white text on arbitrary tag colors while also requiring WCAG AA contrast. | Preserve the selected background color and choose a contrast-compliant foreground rather than requiring white text. |
-| Timestamp representation | SQLite defaults, Singapore-local strings, and ISO timestamp examples are inconsistent across specifications. | Use the timestamp contract under Implementation Ownership and Contracts. Singapore remains the application calendar/display timezone; UTC storage does not change product timezone behavior. |
+- Build authentication before protected APIs. Initial registration/login endpoints are public but validate input and origin; additional passkeys require the active user's session.
+- Challenges are short-lived, browser-bound, single-use, and atomically consumed. Recurring instances inherit priority, tags, and reminders.
+- Templates snapshot subtasks, not tags or concrete due dates. Recurring/reminder templates require a valid due-date offset; malformed subtask JSON fails without creating a todo.
+- Search covers todo and subtask titles (300 ms debounce), with filters ordered search, priority, tag, completion, date. Calendar uses a fixed 6x7 grid and ignores list filters.
+- Reminders are eligible only in `[due_date - reminder_minutes, due_date]`; delivery is best-effort while polling, not exactly-once. Acknowledge server-side and reset only when schedule fields change.
+- Delete todos immediately with database cascades. JSON export includes subtasks and tag names/colors but not IDs; import validates first and runs transactionally. CSV is one-way.
+- Apply future-date validation only to new or changed interactive deadlines; allow unchanged overdue dates and valid historical imports. Validate recurrence/reminder rules against merged updates.
+- Store instants as canonical UTC ISO 8601; keep holidays as Singapore-local dates and use `lib/timezone.ts` for Singapore calendar arithmetic/display. Choose accessible foreground colors for custom tag backgrounds.
 
 ## Unresolved Product Questions
 
@@ -89,66 +51,10 @@ Do not silently choose behavior for these cases. Record the approved resolution 
 - **Reopening recurring occurrences:** Should reopening and recompleting an occurrence create another successor, or must an occurrence have at most one successor for its lifetime? A `false -> true` check prevents duplicate requests on an already-completed record but does not settle this case. The current schema has no explicit successor or chain link.
 - **Ambiguous case-insensitive tag reuse:** Normal tag uniqueness is case-sensitive, so one user can have existing names differing only by case. Import requires case-insensitive reuse, but does not specify which existing tag wins if several match. Keep normal uniqueness unchanged until a selection or normalization policy is approved.
 
-## Verification and Evaluation Gates
+## Current Core Contracts and Risks
 
-- Create all eight application tables plus the auth challenge table and enable `PRAGMA foreign_keys = ON`.
-- Implement every route in the one-shot API surface plus the approved authenticated passkey-enrollment flow. Authenticate protected APIs first and scope all user-owned reads/writes by `session.userId`; apply the public authentication exceptions above.
-- Route Singapore-time-sensitive calculations through `lib/timezone.ts`; do not use raw `new Date()` for application date/time logic.
-- Pass production build, lint, and TypeScript checks; leave no `console.log` in shipped code.
-- Cover unit, integration, and E2E behavior. The one-shot names 12 Playwright specs (the due-date spec may be folded into CRUD); the evaluation asks for all feature flows and three consecutive stable runs. Project testing rules target at least 80% coverage.
-- Use isolated test databases and independent E2E fixtures rather than depending on a previous spec having run. Configure actual virtual WebAuthn authenticators through Chromium DevTools Protocol; browser flags alone do not create an authenticator.
-- Test transaction rollback, concurrent recurrence completion, cross-user access through parent/child relationships, reminder boundaries, and Singapore/UTC date boundaries. State the scope of coverage measurements.
-- Measure acceptance thresholds rather than assuming them: sorting 500 todos under 50 ms, filtering 1,000 todos under 100 ms excluding the intentional 300 ms debounce, importing 500 todos under five seconds, average API responses under 300 ms, and CRUD p95 under 300 ms. Verify the remaining frontend, accessibility, and browser targets in `EVALUATION.md` under documented conditions.
-- Check WebAuthn/session security, input validation, prepared SQL, cookie attributes, CSRF/rate limiting expectations, accessible controls/contrast, and responsive behavior.
-- MVP evaluation includes a working HTTPS deployment, persistent database, production authentication, all core features, passing E2E tests, and no critical bugs. SQLite persistence must be considered when choosing a deployment platform; the deployment docs favor Railway with a persistent volume over Vercel's ephemeral filesystem.
-- Target an initial single Railway application instance with a persistent SQLite volume and configurable database path. Verify data survives restart and redeployment, exercise backup/restore, and smoke-test production passkeys on the configured HTTPS origin. Vercel's ephemeral filesystem alone does not satisfy persistence.
+- Todo reads and mutations are scoped to `session.userId`; mutation routes validate origin, cap JSON bodies at 64 KiB, and return 404 for missing or foreign-owned items. Recheck recurrence/reminder invariants against merged state.
+- Parse `datetime-local` inputs as Singapore time and store UTC ISO timestamps. Only new or changed interactive deadlines require at least one minute in the future; unchanged overdue dates remain valid, and an exact-now deadline is Pending.
+- Authentication currently has no rate limiting; username-first flows can reveal account/credential existence. Stateless JWTs copied from a browser remain valid until their seven-day expiry, even after logout.
 
-## PRP 11 Implementation Progress
-
-- Bootstrapped the documented Next.js 16 / React 19 / Tailwind 4 / TypeScript app tooling while preserving the existing planning documents.
-- Added the eight shared application tables plus `auth_challenges`. Challenges are persisted in SQLite, expire after five minutes, and are consumed transactionally once; this resolves PRP 11's unspecified in-memory challenge lifecycle and supports restarts.
-- Implemented JWT session helpers with seven-day expiry, HTTP-only/SameSite=Lax cookies, Secure in production, and fail-closed verification. Auth POST routes enforce the configured same-origin `RP_ORIGIN`; rate limiting remains out of scope per PRP 11 and should be addressed before public production exposure.
-- Implemented WebAuthn using the installed SimpleWebAuthn v13 contract (`credential.id`, `credential.publicKey`, and `credential` verification options), while preserving base64url credential IDs and explicit zero-counter handling.
-- WebAuthn user handles are random opaque UUIDs stored per user; database initialization backfills them for pre-existing rows. Additional-passkey verification rechecks that the issuing session is still active and belongs to the challenge user.
-- Authenticated registration repairs and persists a missing legacy user handle before issuing options. Logout only redirects after the server confirms the session cookie was cleared; request failures remain visible for retry.
-- Authenticator counter persistence is a conditional monotonic SQLite update, so concurrent assertions cannot lower the stored counter. User-plus-authenticator creation is transactional and covered by a rollback test.
-- Resolved the PRP's multiple-authenticator gap: unauthenticated duplicate registration remains a 409, while a signed-in user can register another authenticator for their own username; existing credentials are sent as `excludeCredentials`.
-- Added unit/API tests and Chromium virtual-authenticator journeys for registration, login, session persistence, logout, protected redirects, duplicate registration, replay/counter rejection, and a second authenticator.
-- Next 16 deprecates the `middleware.ts` filename in favor of `proxy.ts`; route protection is implemented in `proxy.ts` for `/`, `/calendar`, and `/login`, including unauthenticated redirects and authenticated-login redirects. The PRP's `middleware.ts` references are treated as the route-protection requirement.
-- Username-first WebAuthn options and the required duplicate-registration 409 reveal account existence/credential IDs. This is a protocol/spec tradeoff; rate limiting remains out of scope in PRP 11, so revisit both before public production exposure.
-- Sessions are stateless JWTs: logout clears the current browser's cookie, but a copied token remains valid until its seven-day expiry.
-- Final verification for this implementation slice: 43 Vitest tests with at least 80% coverage in all metrics, typecheck, lint, production build, and virtual-authenticator Playwright journeys pass.
-
-## PRP 01 Implementation Progress
-
-- Added user-scoped todo persistence with prepared statements, batched subtask/tag loading, transactional tag assignment, partial updates, and SQLite cascade deletion. Item reads, updates, and deletes include `user_id` in their database predicates.
-- Added authenticated collection/item routes with strict Zod validation, same-origin checks for mutations, trimmed non-empty titles, enumerated priority/reminder/recurrence values, and `404` responses for missing or foreign-owned todos.
-- Mutating todo requests are read with a 64 KiB streaming JSON limit before parsing. Typed `TodoValidationError` failures return `400`; unexpected persistence failures return a generic `500` without exposing internals. No title-specific server maximum was introduced, preserving the CRUD PRP’s long-title behavior.
-- Due dates from Singapore `datetime-local` inputs are parsed explicitly as Singapore time and stored as canonical UTC ISO strings. New or changed interactive deadlines must be at least one minute ahead; unchanged historical deadlines remain editable. This follows the timestamp contract and approved deadline clarification above.
-- Existing timestamped tables are normalized to canonical UTC ISO values at database initialization; todo/auth inserts write explicit UTC ISO timestamps so legacy table defaults cannot reintroduce the old SQLite datetime representation. Todo recurrence/reminder invariants are checked again inside the database update transaction to protect merged state.
-- Added pure priority/due/creation sorting and Overdue/Pending/Completed sectioning; exact-now deadlines remain Pending and completed rows sort by last update.
-- Replaced the authenticated home placeholder with create/edit/toggle/delete flows, optimistic updates with rollback, metadata controls, immediate deletion without confirmation, and a focus-managed edit dialog. Creation waits for the initial list request; completion mutations are serialized per todo.
-- Resolved the evaluation checklist conflicts in favor of the detailed behavior specs: label the section “Pending” (not “Active”) and delete immediately without a confirmation dialog.
-- Added Vitest database/date/route coverage and Playwright CRUD journeys; Playwright runs with `Asia/Singapore` timezone. The CRUD suite covers create/edit/cancel/complete/reopen/delete, metadata, optimistic rollback for create/edit/toggle/delete, delayed initial loading, failed-load retry, and focus retention after section moves. Todo creation remains disabled until initial loading succeeds.
-- Final verification: 76 Vitest tests pass with coverage thresholds met; all 10 auth/CRUD Playwright tests pass; TypeScript, ESLint, production build, and changed-file diagnostics pass.
-
-## Known Documentation Mismatches
-
-- The PRP index groups authentication last or parallel, while the one-shot and API contract require it first.
-- The one-shot's feature order places recurrence before reminders and tags, despite recurrence inheritance requirements. Use the dependency-safe sequence above.
-- Evaluation and the PRP index describe search over tag names in places, while the one-shot and detailed search behavior specify titles and subtasks.
-- Test counts vary: the one-shot enumerates 12 Playwright specs, while other documentation says 11 feature suites. Due-date tests may be included in the CRUD suite; preserve behavior coverage rather than forcing a file count.
-- The security and testing rules add expectations not fully enumerated in the one-shot, including CSRF/rate limiting and unit/integration coverage. Treat them as additional project quality gates.
-- The README's former sample tree incorrectly placed PRPs under `.github/`; the canonical target tree now places all PRPs in the root `PRPs/` directory and is referenced by both agent guides.
-
-## Team Pitfalls and Prevention
-
-- **Stale checkout:** Remote commits may change requirements, APIs, or files while an agent is starting. Check `git status --short --branch`, fetch the configured remote, and fast-forward with `git pull --ff-only` before reviewing task requirements or making design/implementation decisions. Do not mistake `git fetch` alone for updating the working tree.
-- **Concurrent edits lost or accidentally included:** Inspect status and diffs before editing and before committing. Preserve work you did not create; never use reset/checkout or other destructive commands to clear conflicts. Stage only files belonging to the current task unless explicitly asked otherwise. If a safe update is blocked by local edits or branch divergence, coordinate rather than guessing.
-- **Conflicting or obsolete requirements:** Read this file, the relevant PRP, and the README hierarchy after synchronizing. Treat explicit resolutions here and in the one-shot spec as controlling; do not silently merge contradictory requirements. Record new decisions and update the shared source documents as required.
-- **Files created in the wrong place:** Follow the README target hierarchy. Keep PRPs at the repository root, not under `.github/`; keep application code, shared logic, tests, and scripts in `app/`, `lib/`, `tests/`, and `scripts/` respectively. The application scaffold now exists; inspect current files before adding more source or changing setup.
-- **Cross-feature contract breaks:** Keep user data scoped to `session.userId`; keep database access server-side; use prepared statements and enable SQLite foreign keys. Use transactions for multi-table operations such as import. Recurrence must carry forward tags and reminder settings, and templates must preserve their specified subtask snapshot.
-- **Timezone/date regressions:** Route application date/time calculations through `lib/timezone.ts`. Test recurrence month-end/leap-year behavior and Singapore calendar boundaries rather than relying on local machine timezone.
-- **Unverified changes:** Use tests and checks appropriate to the changed layer: unit/integration for domain and persistence logic, Playwright for critical user flows, plus build/lint/type checks. Do not claim tests pass when the app has not yet been scaffolded or the checks were not run.
-- **Architecture drift:** Preserve the specified single Next.js app and monolithic main todo client page unless a shared design decision explicitly changes that convention. Do not introduce duplicate project trees or unapproved abstractions while parallel work is in flight.
-- **Project customization and hook scope drift:** Agent definitions and project-local skills live under `.claude/agents/` and `.claude/skills/`. Project command docs must refer to those checked-in paths. User-level/global hooks belong in `~/.claude/settings.json`; project-level hooks belong in `.claude/settings.json`. This repository's `.claude/hooks.json` is a project-maintained companion config and must be explicitly loaded or merged because it is not Claude Code's standard settings filename. Reserve other `~/.claude/` paths for user-level configuration, plugin data, or user-level learned skills. Documentation examples must not hardcode a contributor's home directory or tool installation path; use placeholders and label platform-specific variants.
+Consult or update this reference only when explicitly requested.
