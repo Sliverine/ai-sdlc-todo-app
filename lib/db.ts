@@ -283,6 +283,35 @@ export function createDatabase(filePath: string): Database.Database {
   return database
 }
 
+export function createHolidayDB(database: Database.Database) {
+  return {
+    findAll(): Holiday[] {
+      return database.prepare('SELECT id, date, name FROM holidays ORDER BY date, name').all() as Holiday[]
+    },
+
+    upsert(date: string, name: string): void {
+      database.prepare(`
+        INSERT INTO holidays (date, name) VALUES (?, ?)
+        ON CONFLICT(date) DO UPDATE SET name = excluded.name
+      `).run(date, name)
+    },
+
+    findByMonth(year: number, month: number): Holiday[] {
+      const firstOfMonth = new Date(Date.UTC(year, month - 1, 1))
+      const firstVisibleDate = new Date(Date.UTC(year, month - 1, 1 - firstOfMonth.getUTCDay()))
+      const lastVisibleDate = new Date(firstVisibleDate.getTime() + 41 * 24 * 60 * 60 * 1000)
+      const startDate = firstVisibleDate.toISOString().slice(0, 10)
+      const endDate = lastVisibleDate.toISOString().slice(0, 10)
+
+      return database.prepare(`
+        SELECT id, date, name FROM holidays
+        WHERE date BETWEEN ? AND ?
+        ORDER BY date, name
+      `).all(startDate, endDate) as Holiday[]
+    },
+  }
+}
+
 function ensureColumn(database: Database.Database, table: string, column: string, definition: string): void {
   const columns = database.pragma(`table_info(${table})`) as Array<{ name: string }>
   if (!columns.some((entry) => entry.name === column)) {
@@ -589,6 +618,7 @@ export function createSubtaskDB(database: Database.Database) {
 export const db = createDatabase(process.env.DATABASE_PATH ?? join(process.cwd(), 'todos.db'))
 export const todoDB = createTodoDB(db)
 export const subtaskDB = createSubtaskDB(db)
+export const holidayDB = createHolidayDB(db)
 
 export function createTagDB(database: Database.Database) {
   function normalizeName(value: string | undefined): string {
